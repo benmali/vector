@@ -139,7 +139,7 @@ checksum = "265dca43d9dbb3d5bbb0b3ef1b0cd9044ce3aa5d697d5b66cde974d1f6063f09"
 dependencies = [
  "amq-protocol-uri",
  "tcp-stream",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -777,7 +777,7 @@ dependencies = [
  "polling 3.7.4",
  "rustix 0.38.40",
  "slab",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "windows-sys 0.59.0",
 ]
 
@@ -832,7 +832,7 @@ dependencies = [
  "tokio-rustls 0.26.2",
  "tokio-util",
  "tokio-websockets",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "tryhard",
  "url",
 ]
@@ -978,8 +978,8 @@ dependencies = [
  "aws-sdk-ssooidc",
  "aws-sdk-sts",
  "aws-smithy-async",
- "aws-smithy-http",
- "aws-smithy-json",
+ "aws-smithy-http 0.62.3",
+ "aws-smithy-json 0.61.3",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
@@ -991,16 +991,16 @@ dependencies = [
  "ring",
  "time",
  "tokio",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "url",
  "zeroize",
 ]
 
 [[package]]
 name = "aws-credential-types"
-version = "1.2.6"
+version = "1.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d025db5d9f52cbc413b167136afb3d8aeea708c0d8884783cf6253be5e22f6f2"
+checksum = "8f20799b373a1be121fe3005fba0c2090af9411573878f224df44b42727fcaf7"
 dependencies = [
  "aws-smithy-async",
  "aws-smithy-runtime-api",
@@ -1010,26 +1010,29 @@ dependencies = [
 
 [[package]]
 name = "aws-runtime"
-version = "1.5.10"
+version = "1.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c034a1bc1d70e16e7f4e4caf7e9f7693e4c9c24cd91cf17c2a0b21abaebc7c8b"
+checksum = "5fc0651c57e384202e47153c1260b84a9936e19803d747615edf199dc3b98d17"
 dependencies = [
  "aws-credential-types",
  "aws-sigv4",
  "aws-smithy-async",
  "aws-smithy-eventstream",
- "aws-smithy-http",
+ "aws-smithy-http 0.63.6",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "aws-types",
  "bytes 1.11.1",
+ "bytes-utils",
  "fastrand 2.3.0",
- "http 0.2.9",
+ "http 0.2.12",
+ "http 1.3.1",
  "http-body 0.4.6",
+ "http-body 1.0.1",
  "percent-encoding",
  "pin-project-lite",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "uuid",
 ]
 
@@ -1043,8 +1046,8 @@ dependencies = [
  "aws-runtime",
  "aws-smithy-async",
  "aws-smithy-compression",
- "aws-smithy-http",
- "aws-smithy-json",
+ "aws-smithy-http 0.62.3",
+ "aws-smithy-json 0.61.3",
  "aws-smithy-query",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
@@ -1053,11 +1056,11 @@ dependencies = [
  "aws-types",
  "fastrand 2.3.0",
  "flate2",
- "http 0.2.9",
+ "http 0.2.12",
  "http-body 0.4.6",
  "once_cell",
  "regex-lite",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -1070,18 +1073,42 @@ dependencies = [
  "aws-runtime",
  "aws-smithy-async",
  "aws-smithy-eventstream",
- "aws-smithy-http",
- "aws-smithy-json",
+ "aws-smithy-http 0.62.3",
+ "aws-smithy-json 0.61.3",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "aws-types",
  "bytes 1.11.1",
  "fastrand 2.3.0",
- "http 0.2.9",
+ "http 0.2.12",
  "once_cell",
  "regex-lite",
- "tracing 0.1.41",
+ "tracing 0.1.44",
+]
+
+[[package]]
+name = "aws-sdk-dynamodb"
+version = "1.110.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c597424385739456cd04535982831c15bd58f97ca28c5bcb232c0d730d5cb39"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http 0.63.6",
+ "aws-smithy-json 0.62.5",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes 1.11.1",
+ "fastrand 2.3.0",
+ "http 0.2.12",
+ "http 1.3.1",
+ "regex-lite",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -1093,18 +1120,18 @@ dependencies = [
  "aws-credential-types",
  "aws-runtime",
  "aws-smithy-async",
- "aws-smithy-http",
- "aws-smithy-json",
+ "aws-smithy-http 0.62.3",
+ "aws-smithy-json 0.61.3",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "aws-types",
  "bytes 1.11.1",
  "fastrand 2.3.0",
- "http 0.2.9",
+ "http 0.2.12",
  "once_cell",
  "regex-lite",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -1116,18 +1143,18 @@ dependencies = [
  "aws-credential-types",
  "aws-runtime",
  "aws-smithy-async",
- "aws-smithy-http",
- "aws-smithy-json",
+ "aws-smithy-http 0.62.3",
+ "aws-smithy-json 0.61.3",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "aws-types",
  "bytes 1.11.1",
  "fastrand 2.3.0",
- "http 0.2.9",
+ "http 0.2.12",
  "once_cell",
  "regex-lite",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -1140,18 +1167,18 @@ dependencies = [
  "aws-runtime",
  "aws-smithy-async",
  "aws-smithy-eventstream",
- "aws-smithy-http",
- "aws-smithy-json",
+ "aws-smithy-http 0.62.3",
+ "aws-smithy-json 0.61.3",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "aws-types",
  "bytes 1.11.1",
  "fastrand 2.3.0",
- "http 0.2.9",
+ "http 0.2.12",
  "once_cell",
  "regex-lite",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -1163,17 +1190,17 @@ dependencies = [
  "aws-credential-types",
  "aws-runtime",
  "aws-smithy-async",
- "aws-smithy-http",
- "aws-smithy-json",
+ "aws-smithy-http 0.62.3",
+ "aws-smithy-json 0.61.3",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "aws-types",
  "bytes 1.11.1",
  "fastrand 2.3.0",
- "http 0.2.9",
+ "http 0.2.12",
  "regex-lite",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -1188,8 +1215,8 @@ dependencies = [
  "aws-smithy-async",
  "aws-smithy-checksums",
  "aws-smithy-eventstream",
- "aws-smithy-http",
- "aws-smithy-json",
+ "aws-smithy-http 0.62.3",
+ "aws-smithy-json 0.61.3",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
@@ -1199,7 +1226,7 @@ dependencies = [
  "fastrand 2.3.0",
  "hex",
  "hmac",
- "http 0.2.9",
+ "http 0.2.12",
  "http 1.3.1",
  "http-body 0.4.6",
  "lru 0.12.5",
@@ -1207,7 +1234,7 @@ dependencies = [
  "percent-encoding",
  "regex-lite",
  "sha2",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "url",
 ]
 
@@ -1220,17 +1247,17 @@ dependencies = [
  "aws-credential-types",
  "aws-runtime",
  "aws-smithy-async",
- "aws-smithy-http",
- "aws-smithy-json",
+ "aws-smithy-http 0.62.3",
+ "aws-smithy-json 0.61.3",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "aws-types",
  "bytes 1.11.1",
  "fastrand 2.3.0",
- "http 0.2.9",
+ "http 0.2.12",
  "regex-lite",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -1242,8 +1269,8 @@ dependencies = [
  "aws-credential-types",
  "aws-runtime",
  "aws-smithy-async",
- "aws-smithy-http",
- "aws-smithy-json",
+ "aws-smithy-http 0.62.3",
+ "aws-smithy-json 0.61.3",
  "aws-smithy-query",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
@@ -1251,9 +1278,9 @@ dependencies = [
  "aws-smithy-xml",
  "aws-types",
  "fastrand 2.3.0",
- "http 0.2.9",
+ "http 0.2.12",
  "regex-lite",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -1265,18 +1292,18 @@ dependencies = [
  "aws-credential-types",
  "aws-runtime",
  "aws-smithy-async",
- "aws-smithy-http",
- "aws-smithy-json",
+ "aws-smithy-http 0.62.3",
+ "aws-smithy-json 0.61.3",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "aws-types",
  "bytes 1.11.1",
  "fastrand 2.3.0",
- "http 0.2.9",
+ "http 0.2.12",
  "once_cell",
  "regex-lite",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -1288,18 +1315,18 @@ dependencies = [
  "aws-credential-types",
  "aws-runtime",
  "aws-smithy-async",
- "aws-smithy-http",
- "aws-smithy-json",
+ "aws-smithy-http 0.62.3",
+ "aws-smithy-json 0.61.3",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "aws-types",
  "bytes 1.11.1",
  "fastrand 2.3.0",
- "http 0.2.9",
+ "http 0.2.12",
  "once_cell",
  "regex-lite",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -1311,18 +1338,18 @@ dependencies = [
  "aws-credential-types",
  "aws-runtime",
  "aws-smithy-async",
- "aws-smithy-http",
- "aws-smithy-json",
+ "aws-smithy-http 0.62.3",
+ "aws-smithy-json 0.61.3",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "aws-types",
  "bytes 1.11.1",
  "fastrand 2.3.0",
- "http 0.2.9",
+ "http 0.2.12",
  "once_cell",
  "regex-lite",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -1334,8 +1361,8 @@ dependencies = [
  "aws-credential-types",
  "aws-runtime",
  "aws-smithy-async",
- "aws-smithy-http",
- "aws-smithy-json",
+ "aws-smithy-http 0.62.3",
+ "aws-smithy-json 0.61.3",
  "aws-smithy-query",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
@@ -1343,39 +1370,39 @@ dependencies = [
  "aws-smithy-xml",
  "aws-types",
  "fastrand 2.3.0",
- "http 0.2.9",
+ "http 0.2.12",
  "regex-lite",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
 name = "aws-sigv4"
-version = "1.3.4"
+version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "084c34162187d39e3740cb635acd73c4e3a551a36146ad6fe8883c929c9f876c"
+checksum = "b0b660013a6683ab23797778e21f1f854744fdf05f68204b4cca4c8c04b5d1f4"
 dependencies = [
  "aws-credential-types",
  "aws-smithy-eventstream",
- "aws-smithy-http",
+ "aws-smithy-http 0.63.6",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "bytes 1.11.1",
  "form_urlencoded",
  "hex",
  "hmac",
- "http 0.2.9",
+ "http 0.2.12",
  "http 1.3.1",
  "percent-encoding",
  "sha2",
  "time",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
 name = "aws-smithy-async"
-version = "1.2.5"
+version = "1.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e190749ea56f8c42bf15dd76c65e14f8f765233e6df9b0506d9d934ebef867c"
+checksum = "2ffcaf626bdda484571968400c326a244598634dc75fd451325a54ad1a59acfc"
 dependencies = [
  "futures-util",
  "pin-project-lite",
@@ -1388,20 +1415,20 @@ version = "0.63.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b65d21e1ba6f2cdec92044f904356a19f5ad86961acf015741106cdfafd747c0"
 dependencies = [
- "aws-smithy-http",
+ "aws-smithy-http 0.62.3",
  "aws-smithy-types",
  "bytes 1.11.1",
  "crc32c",
  "crc32fast",
  "crc64fast-nvme",
  "hex",
- "http 0.2.9",
+ "http 0.2.12",
  "http-body 0.4.6",
  "md-5",
  "pin-project-lite",
  "sha1",
  "sha2",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -1415,17 +1442,17 @@ dependencies = [
  "bytes 1.11.1",
  "flate2",
  "futures-util",
- "http 0.2.9",
+ "http 0.2.12",
  "http-body 0.4.6",
  "pin-project-lite",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
 name = "aws-smithy-eventstream"
-version = "0.60.10"
+version = "0.60.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "604c7aec361252b8f1c871a7641d5e0ba3a7f5a586e51b66bc9510a5519594d9"
+checksum = "faf09d74e5e32f76b8762da505a3cd59303e367a664ca67295387baa8c1d7548"
 dependencies = [
  "aws-smithy-types",
  "bytes 1.11.1",
@@ -1444,34 +1471,56 @@ dependencies = [
  "bytes 1.11.1",
  "bytes-utils",
  "futures-core",
- "http 0.2.9",
+ "http 0.2.12",
  "http 1.3.1",
  "http-body 0.4.6",
  "percent-encoding",
  "pin-project-lite",
  "pin-utils",
- "tracing 0.1.41",
+ "tracing 0.1.44",
+]
+
+[[package]]
+name = "aws-smithy-http"
+version = "0.63.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba1ab2dc1c2c3749ead27180d333c42f11be8b0e934058fb4b2258ee8dbe5231"
+dependencies = [
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "bytes 1.11.1",
+ "bytes-utils",
+ "futures-core",
+ "futures-util",
+ "http 1.3.1",
+ "http-body 1.0.1",
+ "http-body-util",
+ "percent-encoding",
+ "pin-project-lite",
+ "pin-utils",
+ "tracing 0.1.44",
 ]
 
 [[package]]
 name = "aws-smithy-http-client"
-version = "1.1.1"
+version = "1.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "147e8eea63a40315d704b97bf9bc9b8c1402ae94f89d5ad6f7550d963309da1b"
+checksum = "6a2f165a7feee6f263028b899d0a181987f4fa7179a6411a32a439fba7c5f769"
 dependencies = [
  "aws-smithy-async",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "h2 0.3.26",
  "h2 0.4.12",
- "http 0.2.9",
+ "http 0.2.12",
  "http-body 0.4.6",
  "hyper 0.14.32",
  "hyper-rustls 0.24.2",
  "pin-project-lite",
  "rustls 0.21.12",
+ "rustls-native-certs 0.8.1",
  "tokio",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -1484,10 +1533,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "aws-smithy-observability"
-version = "0.1.3"
+name = "aws-smithy-json"
+version = "0.62.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9364d5989ac4dd918e5cc4c4bdcc61c9be17dcd2586ea7f69e348fc7c6cab393"
+checksum = "9648b0bb82a2eedd844052c6ad2a1a822d1f8e3adee5fbf668366717e428856a"
+dependencies = [
+ "aws-smithy-types",
+]
+
+[[package]]
+name = "aws-smithy-observability"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a06c2315d173edbf1920da8ba3a7189695827002e4c0fc961973ab1c54abca9c"
 dependencies = [
  "aws-smithy-runtime-api",
 ]
@@ -1504,59 +1562,60 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-runtime"
-version = "1.9.2"
+version = "1.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fa63ad37685ceb7762fa4d73d06f1d5493feb88e3f27259b9ed277f4c01b185"
+checksum = "028999056d2d2fd58a697232f9eec4a643cf73a71cf327690a7edad1d2af2110"
 dependencies = [
  "aws-smithy-async",
- "aws-smithy-http",
+ "aws-smithy-http 0.63.6",
  "aws-smithy-http-client",
  "aws-smithy-observability",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "bytes 1.11.1",
  "fastrand 2.3.0",
- "http 0.2.9",
+ "http 0.2.12",
  "http 1.3.1",
  "http-body 0.4.6",
- "http-body 1.0.0",
+ "http-body 1.0.1",
+ "http-body-util",
  "pin-project-lite",
  "pin-utils",
  "tokio",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
 name = "aws-smithy-runtime-api"
-version = "1.9.0"
+version = "1.11.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07f5e0fc8a6b3f2303f331b94504bbf754d85488f402d6f1dd7a6080f99afe56"
+checksum = "876ab3c9c29791ba4ba02b780a3049e21ec63dabda09268b175272c3733a79e6"
 dependencies = [
  "aws-smithy-async",
  "aws-smithy-types",
  "bytes 1.11.1",
- "http 0.2.9",
+ "http 0.2.12",
  "http 1.3.1",
  "pin-project-lite",
  "tokio",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "zeroize",
 ]
 
 [[package]]
 name = "aws-smithy-types"
-version = "1.3.2"
+version = "1.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d498595448e43de7f4296b7b7a18a8a02c61ec9349128c80a368f7c3b4ab11a8"
+checksum = "9d73dbfbaa8e4bc57b9045137680b958d274823509a360abfd8e1d514d40c95c"
 dependencies = [
  "base64-simd",
  "bytes 1.11.1",
  "bytes-utils",
  "futures-core",
- "http 0.2.9",
+ "http 0.2.12",
  "http 1.3.1",
  "http-body 0.4.6",
- "http-body 1.0.0",
+ "http-body 1.0.1",
  "http-body-util",
  "itoa",
  "num-integer",
@@ -1580,16 +1639,16 @@ dependencies = [
 
 [[package]]
 name = "aws-types"
-version = "1.3.8"
+version = "1.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b069d19bf01e46298eaedd7c6f283fe565a59263e53eebec945f3e6398f42390"
+checksum = "47c8323699dd9b3c8d5b3c13051ae9cdef58fd179957c882f8374dd8725962d9"
 dependencies = [
  "aws-credential-types",
  "aws-smithy-async",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "rustc_version",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -1603,7 +1662,7 @@ dependencies = [
  "bitflags 1.3.2",
  "bytes 1.11.1",
  "futures-util",
- "http 0.2.9",
+ "http 0.2.12",
  "http-body 0.4.6",
  "hyper 0.14.32",
  "itoa",
@@ -1632,7 +1691,7 @@ dependencies = [
  "bytes 1.11.1",
  "futures-util",
  "http 1.3.1",
- "http-body 1.0.0",
+ "http-body 1.0.1",
  "http-body-util",
  "itoa",
  "matchit",
@@ -1657,7 +1716,7 @@ dependencies = [
  "async-trait",
  "bytes 1.11.1",
  "futures-util",
- "http 0.2.9",
+ "http 0.2.12",
  "http-body 0.4.6",
  "mime",
  "rustversion",
@@ -1675,7 +1734,7 @@ dependencies = [
  "bytes 1.11.1",
  "futures-util",
  "http 1.3.1",
- "http-body 1.0.0",
+ "http-body 1.0.1",
  "http-body-util",
  "mime",
  "pin-project-lite",
@@ -1701,7 +1760,7 @@ dependencies = [
  "rustc_version",
  "serde",
  "serde_json",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "typespec",
  "typespec_client_core",
 ]
@@ -1715,7 +1774,7 @@ dependencies = [
  "proc-macro2 1.0.101",
  "quote 1.0.40",
  "syn 2.0.106",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -1925,7 +1984,7 @@ dependencies = [
  "futures-io",
  "futures-lite 1.13.0",
  "piper",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -2532,7 +2591,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "toml 0.9.8",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "tracing-test",
  "uuid",
  "vector-common",
@@ -2690,7 +2749,7 @@ dependencies = [
  "prost 0.13.5",
  "prost-types 0.13.5",
  "tonic 0.12.3",
- "tracing-core 0.1.33",
+ "tracing-core 0.1.36",
 ]
 
 [[package]]
@@ -2714,8 +2773,8 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tonic 0.12.3",
- "tracing 0.1.41",
- "tracing-core 0.1.33",
+ "tracing 0.1.44",
+ "tracing-core 0.1.36",
  "tracing-subscriber",
 ]
 
@@ -3522,7 +3581,7 @@ dependencies = [
  "prost 0.12.6",
  "prost-build 0.12.6",
  "snafu 0.8.9",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "vector-common",
  "vector-config",
  "vector-core",
@@ -3544,7 +3603,7 @@ dependencies = [
  "serde",
  "serde_json",
  "snafu 0.8.9",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "vector-config",
  "vector-config-common",
 ]
@@ -3577,7 +3636,7 @@ dependencies = [
  "smallvec",
  "time",
  "tokio",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -4035,7 +4094,7 @@ dependencies = [
  "quickcheck",
  "tempfile",
  "tokio",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "vector-common",
  "winapi",
 ]
@@ -4058,7 +4117,7 @@ dependencies = [
  "similar-asserts",
  "tempfile",
  "tokio",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "vector-common",
  "vector-config",
  "winapi",
@@ -4610,12 +4669,12 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "futures-util",
- "http 0.2.9",
+ "http 0.2.12",
  "indexmap 2.12.0",
  "slab",
  "tokio",
  "tokio-util",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -4634,7 +4693,7 @@ dependencies = [
  "slab",
  "tokio",
  "tokio-util",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -4734,7 +4793,7 @@ dependencies = [
  "base64 0.21.7",
  "bytes 1.11.1",
  "headers-core",
- "http 0.2.9",
+ "http 0.2.12",
  "httpdate",
  "mime",
  "sha1",
@@ -4746,7 +4805,7 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7f66481bfee273957b1f20485a4ff3362987f85b2c236580d81b4eb7a326429"
 dependencies = [
- "http 0.2.9",
+ "http 0.2.12",
 ]
 
 [[package]]
@@ -4923,7 +4982,7 @@ dependencies = [
  "thiserror 1.0.68",
  "tinyvec",
  "tokio",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "url",
 ]
 
@@ -4950,7 +5009,7 @@ dependencies = [
  "thiserror 2.0.17",
  "time",
  "tinyvec",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "url",
 ]
 
@@ -4972,7 +5031,7 @@ dependencies = [
  "smallvec",
  "thiserror 1.0.68",
  "tokio",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -5026,9 +5085,9 @@ dependencies = [
 
 [[package]]
 name = "http"
-version = "0.2.9"
+version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd6effc99afb63425aff9b05836f029929e345a6148a14b7ecd5ab67af944482"
+checksum = "601cbb57e577e2f5ef5be8e7b83f0f63994f25aa94d673e54a92d5c516d101f1"
 dependencies = [
  "bytes 1.11.1",
  "fnv",
@@ -5053,15 +5112,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ceab25649e9960c0311ea418d17bee82c0dcec1bd053b5f9a66e265a693bed2"
 dependencies = [
  "bytes 1.11.1",
- "http 0.2.9",
+ "http 0.2.12",
  "pin-project-lite",
 ]
 
 [[package]]
 name = "http-body"
-version = "1.0.0"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1cac85db508abc24a2e48553ba12a996e87244a0395ce011e62b37158745d643"
+checksum = "1efedce1fb8e6913f23e0c92de8e62cd5b772a67e7b3946df930a62566c93184"
 dependencies = [
  "bytes 1.11.1",
  "http 1.3.1",
@@ -5069,14 +5128,14 @@ dependencies = [
 
 [[package]]
 name = "http-body-util"
-version = "0.1.2"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "793429d76616a256bcb62c2a2ec2bed781c8307e797e2598c50010f2bee2544f"
+checksum = "b021d93e26becf5dc7e1b75b1bed1fd93124b374ceb73f43d4d4eafec896a64a"
 dependencies = [
  "bytes 1.11.1",
- "futures-util",
+ "futures-core",
  "http 1.3.1",
- "http-body 1.0.0",
+ "http-body 1.0.1",
  "pin-project-lite",
 ]
 
@@ -5092,7 +5151,7 @@ version = "1.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6f560b665ad9f1572cfcaf034f7fb84338a7ce945216d64a90fd81f046a3caee"
 dependencies = [
- "http 0.2.9",
+ "http 0.2.12",
  "serde",
 ]
 
@@ -5125,7 +5184,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "h2 0.3.26",
- "http 0.2.9",
+ "http 0.2.12",
  "http-body 0.4.6",
  "httparse",
  "httpdate",
@@ -5134,7 +5193,7 @@ dependencies = [
  "socket2 0.5.10",
  "tokio",
  "tower-service",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "want",
 ]
 
@@ -5150,7 +5209,7 @@ dependencies = [
  "futures-core",
  "h2 0.4.12",
  "http 1.3.1",
- "http-body 1.0.0",
+ "http-body 1.0.1",
  "httparse",
  "httpdate",
  "itoa",
@@ -5182,7 +5241,7 @@ version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6ee5d7a8f718585d1c3c61dfde28ef5b0bb14734b4db13f5ada856cdc6c612b"
 dependencies = [
- "http 0.2.9",
+ "http 0.2.12",
  "hyper 0.14.32",
  "linked_hash_set",
  "once_cell",
@@ -5222,7 +5281,7 @@ dependencies = [
  "bytes 1.11.1",
  "futures 0.3.31",
  "headers",
- "http 0.2.9",
+ "http 0.2.12",
  "hyper 0.14.32",
  "openssl",
  "tokio",
@@ -5237,11 +5296,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec3efd23720e2049821a693cbc7e65ea87c72f1c58ff2f9522ff332b1491e590"
 dependencies = [
  "futures-util",
- "http 0.2.9",
+ "http 0.2.12",
  "hyper 0.14.32",
  "log",
  "rustls 0.21.12",
- "rustls-native-certs 0.6.3",
  "tokio",
  "tokio-rustls 0.24.1",
 ]
@@ -5331,7 +5389,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "http 1.3.1",
- "http-body 1.0.0",
+ "http-body 1.0.1",
  "hyper 1.7.0",
  "ipnet",
  "libc",
@@ -5341,7 +5399,7 @@ dependencies = [
  "system-configuration 0.6.1",
  "tokio",
  "tower-service",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "windows-registry",
 ]
 
@@ -5775,9 +5833,9 @@ dependencies = [
 
 [[package]]
 name = "itoa"
-version = "1.0.9"
+version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af150ab688ff2122fcef229be89cb50dd66af9e01a4ff320cc137eecc9bacc38"
+checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jni"
@@ -5899,7 +5957,7 @@ dependencies = [
  "reqwest 0.11.26",
  "serde_json",
  "tokio",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -6014,7 +6072,7 @@ dependencies = [
  "futures 0.3.31",
  "home",
  "http 1.3.1",
- "http-body 1.0.0",
+ "http-body 1.0.1",
  "http-body-util",
  "hyper 1.7.0",
  "hyper-openssl 0.10.2",
@@ -6034,7 +6092,7 @@ dependencies = [
  "tokio-util",
  "tower 0.4.13",
  "tower-http 0.5.2",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -6078,7 +6136,7 @@ dependencies = [
  "thiserror 1.0.68",
  "tokio",
  "tokio-util",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -6130,7 +6188,7 @@ dependencies = [
  "pinky-swear",
  "reactor-trait",
  "serde",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "waker-fn",
 ]
 
@@ -6692,8 +6750,8 @@ dependencies = [
  "metrics",
  "metrics-util",
  "once_cell",
- "tracing 0.1.41",
- "tracing-core 0.1.33",
+ "tracing 0.1.44",
+ "tracing-core 0.1.36",
  "tracing-subscriber",
 ]
 
@@ -7431,7 +7489,7 @@ dependencies = [
  "base64 0.13.1",
  "chrono",
  "getrandom 0.2.15",
- "http 0.2.9",
+ "http 0.2.12",
  "rand 0.8.5",
  "reqwest 0.11.26",
  "serde",
@@ -7548,7 +7606,7 @@ dependencies = [
  "futures 0.3.31",
  "getrandom 0.2.15",
  "http 1.3.1",
- "http-body 1.0.0",
+ "http-body 1.0.1",
  "log",
  "md-5",
  "percent-encoding",
@@ -7571,7 +7629,7 @@ dependencies = [
  "dyn-clone",
  "ed25519-dalek",
  "hmac",
- "http 0.2.9",
+ "http 0.2.12",
  "itertools 0.10.5",
  "log",
  "oauth2",
@@ -8001,7 +8059,7 @@ dependencies = [
  "doc-comment",
  "flume 0.10.14",
  "parking_lot 0.12.4",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -8103,7 +8161,7 @@ dependencies = [
  "hermit-abi 0.4.0",
  "pin-project-lite",
  "rustix 0.38.40",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "windows-sys 0.59.0",
 ]
 
@@ -8742,7 +8800,7 @@ dependencies = [
  "socket2 0.5.10",
  "thiserror 2.0.17",
  "tokio",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -8761,7 +8819,7 @@ dependencies = [
  "slab",
  "thiserror 2.0.17",
  "tinyvec",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "web-time",
 ]
 
@@ -8775,7 +8833,7 @@ dependencies = [
  "libc",
  "once_cell",
  "socket2 0.5.10",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "windows-sys 0.59.0",
 ]
 
@@ -9247,7 +9305,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "h2 0.3.26",
- "http 0.2.9",
+ "http 0.2.12",
  "http-body 0.4.6",
  "hyper 0.14.32",
  "hyper-rustls 0.24.2",
@@ -9295,7 +9353,7 @@ dependencies = [
  "futures-util",
  "h2 0.4.12",
  "http 1.3.1",
- "http-body 1.0.0",
+ "http-body 1.0.1",
  "http-body-util",
  "hyper 1.7.0",
  "hyper-rustls 0.27.5",
@@ -9685,18 +9743,6 @@ dependencies = [
 
 [[package]]
 name = "rustls-native-certs"
-version = "0.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9aace74cb666635c918e9c12bc0d348266037aa8eb599b5cba565709a8dff00"
-dependencies = [
- "openssl-probe",
- "rustls-pemfile 1.0.4",
- "schannel",
- "security-framework 2.10.0",
-]
-
-[[package]]
-name = "rustls-native-certs"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f1fb85efa936c42c6d5fc28d2629bb51e4b2f4b8a5211e297d599cc5a093792"
@@ -9808,9 +9854,9 @@ dependencies = [
 
 [[package]]
 name = "ryu"
-version = "1.0.20"
+version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
+checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "salsa20"
@@ -10619,7 +10665,7 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "tokio-stream",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "url",
  "webpki-roots 0.26.1",
 ]
@@ -10701,7 +10747,7 @@ dependencies = [
  "sqlx-core",
  "stringprep",
  "thiserror 2.0.17",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "whoami",
 ]
 
@@ -10739,7 +10785,7 @@ dependencies = [
  "sqlx-core",
  "stringprep",
  "thiserror 2.0.17",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "whoami",
 ]
 
@@ -10764,7 +10810,7 @@ dependencies = [
  "serde_urlencoded",
  "sqlx-core",
  "thiserror 2.0.17",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "url",
 ]
 
@@ -11338,7 +11384,7 @@ dependencies = [
  "signal-hook-registry",
  "socket2 0.6.0",
  "tokio-macros",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "windows-sys 0.61.0",
 ]
 
@@ -11513,8 +11559,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-util"
-version = "0.7.13"
-source = "git+https://github.com/vectordotdev/tokio?branch=tokio-util-0.7.13-framed-read-continue-on-error#b4bdfda8fe8aa24eba36de0d60063b14f30c7fe7"
+version = "0.7.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ae9cec805b01e8fc3fd2fe289f89149a9b66dd16786abd8b19cfa7b48cb0098"
 dependencies = [
  "bytes 1.11.1",
  "futures-core",
@@ -11650,7 +11697,7 @@ dependencies = [
  "bytes 1.11.1",
  "flate2",
  "h2 0.3.26",
- "http 0.2.9",
+ "http 0.2.12",
  "http-body 0.4.6",
  "hyper 0.14.32",
  "hyper-timeout 0.4.1",
@@ -11666,7 +11713,7 @@ dependencies = [
  "tower 0.4.13",
  "tower-layer",
  "tower-service",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "zstd 0.12.4",
 ]
 
@@ -11683,7 +11730,7 @@ dependencies = [
  "bytes 1.11.1",
  "h2 0.4.12",
  "http 1.3.1",
- "http-body 1.0.0",
+ "http-body 1.0.1",
  "http-body-util",
  "hyper 1.7.0",
  "hyper-timeout 0.5.1",
@@ -11697,7 +11744,7 @@ dependencies = [
  "tower 0.4.13",
  "tower-layer",
  "tower-service",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -11743,7 +11790,7 @@ dependencies = [
  "tokio-util",
  "tower-layer",
  "tower-service",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -11762,7 +11809,7 @@ dependencies = [
  "tokio-util",
  "tower-layer",
  "tower-service",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -11776,7 +11823,7 @@ dependencies = [
  "bytes 1.11.1",
  "futures-core",
  "futures-util",
- "http 0.2.9",
+ "http 0.2.12",
  "http-body 0.4.6",
  "http-range-header",
  "pin-project-lite",
@@ -11784,7 +11831,7 @@ dependencies = [
  "tokio-util",
  "tower-layer",
  "tower-service",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -11797,13 +11844,13 @@ dependencies = [
  "bitflags 2.10.0",
  "bytes 1.11.1",
  "http 1.3.1",
- "http-body 1.0.0",
+ "http-body 1.0.1",
  "http-body-util",
  "mime",
  "pin-project-lite",
  "tower-layer",
  "tower-service",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -11818,7 +11865,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "http 1.3.1",
- "http-body 1.0.0",
+ "http-body 1.0.1",
  "http-body-util",
  "iri-string",
  "pin-project-lite",
@@ -11857,14 +11904,14 @@ dependencies = [
 
 [[package]]
 name = "tracing"
-version = "0.1.41"
+version = "0.1.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "784e0ac535deb450455cbfa28a6f0df145ea1bb7ae51b821cf5e7927fdcfbdd0"
+checksum = "63e71662fa4b2a2c3a26f570f037eb95bb1f85397f3cd8076caed2f026a6d100"
 dependencies = [
  "log",
  "pin-project-lite",
  "tracing-attributes",
- "tracing-core 0.1.33",
+ "tracing-core 0.1.36",
 ]
 
 [[package]]
@@ -11879,9 +11926,9 @@ dependencies = [
 
 [[package]]
 name = "tracing-attributes"
-version = "0.1.28"
+version = "0.1.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "395ae124c09f9e6918a2310af6038fba074bcf474ac352496d5910dd59a2226d"
+checksum = "7490cfa5ec963746568740651ac6781f701c9c5ea257c58e057f3ba8cf69e8da"
 dependencies = [
  "proc-macro2 1.0.101",
  "quote 1.0.40",
@@ -11890,9 +11937,9 @@ dependencies = [
 
 [[package]]
 name = "tracing-core"
-version = "0.1.33"
+version = "0.1.36"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e672c95779cf947c5311f83787af4fa8fffd12fb27e4993211a84bdfd9610f9c"
+checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
  "valuable",
@@ -11912,8 +11959,8 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "12de1a8c6bcfee614305e836308b596bbac831137a04c61f7e5b0b0bf2cfeaf6"
 dependencies = [
- "tracing 0.1.41",
- "tracing-core 0.1.33",
+ "tracing 0.1.44",
+ "tracing-core 0.1.36",
  "tracing-subscriber",
 ]
 
@@ -11926,7 +11973,7 @@ dependencies = [
  "futures 0.3.31",
  "futures-task",
  "pin-project",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -11946,8 +11993,8 @@ dependencies = [
  "dashmap",
  "mock_instant",
  "serial_test",
- "tracing 0.1.41",
- "tracing-core 0.1.33",
+ "tracing 0.1.44",
+ "tracing-core 0.1.36",
  "tracing-subscriber",
 ]
 
@@ -11959,7 +12006,7 @@ checksum = "ee855f1f400bd0e5c02d150ae5de3840039a3f54b025156404e34c23c03f47c3"
 dependencies = [
  "log",
  "once_cell",
- "tracing-core 0.1.33",
+ "tracing-core 0.1.36",
 ]
 
 [[package]]
@@ -11969,7 +12016,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "704b1aeb7be0d0a84fc9828cae51dab5970fee5088f83d1dd7ee6f6246fc6ff1"
 dependencies = [
  "serde",
- "tracing-core 0.1.33",
+ "tracing-core 0.1.36",
 ]
 
 [[package]]
@@ -11987,8 +12034,8 @@ dependencies = [
  "sharded-slab",
  "smallvec",
  "thread_local",
- "tracing 0.1.41",
- "tracing-core 0.1.33",
+ "tracing 0.1.44",
+ "tracing-core 0.1.36",
  "tracing-log",
  "tracing-serde",
 ]
@@ -11999,7 +12046,7 @@ version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "557b891436fe0d5e0e363427fc7f217abf9ccd510d5136549847bdcbcd011d68"
 dependencies = [
- "tracing-core 0.1.33",
+ "tracing-core 0.1.36",
  "tracing-subscriber",
  "tracing-test-macro",
 ]
@@ -12056,7 +12103,7 @@ dependencies = [
  "byteorder",
  "bytes 1.11.1",
  "data-encoding",
- "http 0.2.9",
+ "http 0.2.12",
  "httparse",
  "log",
  "rand 0.8.5",
@@ -12170,7 +12217,7 @@ dependencies = [
  "serde_json",
  "time",
  "tokio",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "typespec",
  "typespec_macros",
  "url",
@@ -12499,6 +12546,7 @@ dependencies = [
  "aws-runtime",
  "aws-sdk-cloudwatch",
  "aws-sdk-cloudwatchlogs",
+ "aws-sdk-dynamodb",
  "aws-sdk-elasticsearch",
  "aws-sdk-firehose",
  "aws-sdk-kinesis",
@@ -12510,7 +12558,7 @@ dependencies = [
  "aws-sdk-sts",
  "aws-sigv4",
  "aws-smithy-async",
- "aws-smithy-http",
+ "aws-smithy-http 0.62.3",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
@@ -12561,7 +12609,7 @@ dependencies = [
  "hex",
  "hickory-proto 0.25.2",
  "hostname 0.4.0",
- "http 0.2.9",
+ "http 0.2.12",
  "http 1.3.1",
  "http-body 0.4.6",
  "http-serde",
@@ -12664,8 +12712,8 @@ dependencies = [
  "tower 0.5.2",
  "tower-http 0.4.4",
  "tower-test",
- "tracing 0.1.41",
- "tracing-core 0.1.33",
+ "tracing 0.1.44",
+ "tracing-core 0.1.36",
  "tracing-futures 0.2.5",
  "tracing-limit",
  "tracing-subscriber",
@@ -12743,7 +12791,7 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tokio-util",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "tracing-fluent-assertions",
  "tracing-subscriber",
  "vector-common",
@@ -12770,7 +12818,7 @@ dependencies = [
  "smallvec",
  "stream-cancel",
  "tokio",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "vector-common-macros",
  "vector-config",
  "vrl",
@@ -12793,7 +12841,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "encoding_rs",
- "http 0.2.9",
+ "http 0.2.12",
  "indexmap 2.12.0",
  "inventory",
  "no-proxy",
@@ -12803,7 +12851,7 @@ dependencies = [
  "serde_with",
  "snafu 0.8.9",
  "toml 0.9.8",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "url",
  "vector-config-common",
  "vector-config-macros",
@@ -12821,7 +12869,7 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 2.0.106",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -12859,7 +12907,7 @@ dependencies = [
  "futures 0.3.31",
  "futures-util",
  "headers",
- "http 0.2.9",
+ "http 0.2.12",
  "hyper-proxy",
  "indexmap 2.12.0",
  "inventory",
@@ -12904,7 +12952,7 @@ dependencies = [
  "tokio-util",
  "toml 0.9.8",
  "tonic 0.11.0",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "tracing-subscriber",
  "url",
  "urlencoding",
@@ -12965,7 +13013,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tower 0.5.2",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "twox-hash",
  "vector-common",
  "vector-core",
@@ -12983,7 +13031,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-tungstenite 0.20.1",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "url",
  "uuid",
  "vector-api-client",
@@ -13193,7 +13241,7 @@ dependencies = [
  "termcolor",
  "thiserror 2.0.17",
  "tokio",
- "tracing 0.1.41",
+ "tracing 0.1.44",
  "ua-parser",
  "unicode-segmentation",
  "url",
@@ -13264,7 +13312,7 @@ dependencies = [
  "futures-channel",
  "futures-util",
  "headers",
- "http 0.2.9",
+ "http 0.2.12",
  "hyper 0.14.32",
  "log",
  "mime",
@@ -13279,7 +13327,7 @@ dependencies = [
  "tokio-tungstenite 0.21.0",
  "tokio-util",
  "tower-service",
- "tracing 0.1.41",
+ "tracing 0.1.44",
 ]
 
 [[package]]
@@ -14251,3 +14299,8 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "tokio-util"
+version = "0.7.13"
+source = "git+https://github.com/vectordotdev/tokio?branch=tokio-util-0.7.13-framed-read-continue-on-error#b4bdfda8fe8aa24eba36de0d60063b14f30c7fe7"
