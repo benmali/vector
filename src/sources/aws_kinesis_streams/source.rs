@@ -10,6 +10,7 @@ use std::time::Duration;
 use aws_sdk_dynamodb::Client as DynamoDbClient;
 use aws_sdk_kinesis::{
     Client as KinesisClient,
+    error::DisplayErrorContext,
     types::{Shard, ShardIteratorType},
 };
 use chrono::{TimeZone, Utc};
@@ -216,7 +217,12 @@ impl KinesisStreamsSource {
             .stream_name(id)
             .send()
             .await
-            .map_err(|e| format!("Failed to describe Kinesis stream '{id}': {e}"))?;
+            .map_err(|e| {
+                format!(
+                    "Failed to describe Kinesis stream '{id}': {}",
+                    DisplayErrorContext(&e)
+                )
+            })?;
 
         let arn = result
             .stream_description
@@ -236,7 +242,12 @@ impl KinesisStreamsSource {
             } else {
                 self.kinesis.list_shards().stream_arn(arn).send().await
             }
-            .map_err(|e| format!("Failed to list shards for stream '{arn}': {e}"))?;
+            .map_err(|e| {
+                format!(
+                    "Failed to list shards for stream '{arn}': {}",
+                    DisplayErrorContext(&e)
+                )
+            })?;
 
             if let Some(s) = result.shards {
                 shards.extend(s);
@@ -280,7 +291,7 @@ impl KinesisStreamsSource {
         let result = req
             .send()
             .await
-            .map_err(|e| format!("GetShardIterator error: {e}"))?;
+            .map_err(|e| format!("GetShardIterator error: {}", DisplayErrorContext(&e)))?;
 
         match result.shard_iterator {
             Some(iter) if !iter.is_empty() => Ok(iter),
@@ -293,7 +304,12 @@ impl KinesisStreamsSource {
                     .shard_iterator_type(ShardIteratorType::TrimHorizon)
                     .send()
                     .await
-                    .map_err(|e| format!("GetShardIterator fallback error: {e}"))?;
+                    .map_err(|e| {
+                        format!(
+                            "GetShardIterator fallback error: {}",
+                            DisplayErrorContext(&e)
+                        )
+                    })?;
 
                 fallback
                     .shard_iterator
@@ -649,7 +665,11 @@ impl KinesisStreamsSource {
                             }
                         }
                     } else if !cancel.is_cancelled() {
-                        error!(message = "GetRecords error.", shard = %shard_id, error = %e);
+                        error!(
+                            message = "GetRecords error.",
+                            shard = %shard_id,
+                            error = %DisplayErrorContext(&e),
+                        );
                     }
 
                     let delay = Duration::from_millis(backoff_ms);

@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use aws_sdk_dynamodb::{
     Client as DynamoDbClient,
+    error::DisplayErrorContext,
     types::{
         AttributeDefinition, AttributeValue, BillingMode, KeySchemaElement, KeyType,
         ProvisionedThroughput, ReturnValue, ScalarAttributeType,
@@ -108,7 +109,9 @@ impl KinesisCheckpointer {
                     .map(|se| se.is_resource_not_found_exception())
                     .unwrap_or(false);
                 if !is_not_found {
-                    return Err(format!("DynamoDB DescribeTable error: {e}").into());
+                    return Err(
+                        format!("DynamoDB DescribeTable error: {}", DisplayErrorContext(&e)).into(),
+                    );
                 }
             }
         }
@@ -174,7 +177,12 @@ impl KinesisCheckpointer {
         builder
             .send()
             .await
-            .map_err(|e| format!("Failed to create DynamoDB table: {e}"))?;
+            .map_err(|e| {
+                format!(
+                    "Failed to create DynamoDB table: {}",
+                    DisplayErrorContext(&e)
+                )
+            })?;
         Ok(())
     }
 
@@ -192,7 +200,7 @@ impl KinesisCheckpointer {
             .key("ShardID", AttributeValue::S(shard_id.to_string()))
             .send()
             .await
-            .map_err(|e| format!("DynamoDB GetItem error: {e}"))?;
+            .map_err(|e| format!("DynamoDB GetItem error: {}", DisplayErrorContext(&e)))?;
 
         let item = match result.item {
             Some(i) => i,
@@ -258,7 +266,7 @@ impl KinesisCheckpointer {
             let result = req
                 .send()
                 .await
-                .map_err(|e| format!("DynamoDB Query error: {e}"))?;
+                .map_err(|e| format!("DynamoDB Query error: {}", DisplayErrorContext(&e)))?;
 
             for item in result.items.unwrap_or_default() {
                 let shard_id = match item.get("ShardID") {
@@ -375,7 +383,7 @@ impl KinesisCheckpointer {
                     return Err(CheckpointerError::LeaseNotAcquired);
                 }
                 return Err(CheckpointerError::Other(
-                    format!("DynamoDB UpdateItem error: {e}").into(),
+                    format!("DynamoDB UpdateItem error: {}", DisplayErrorContext(&e)).into(),
                 ));
             }
         };
@@ -480,7 +488,7 @@ impl KinesisCheckpointer {
                 if is_condition_failed {
                     return Ok(false);
                 }
-                Err(format!("DynamoDB PutItem error: {e}").into())
+                Err(format!("DynamoDB PutItem error: {}", DisplayErrorContext(&e)).into())
             }
         }
     }
@@ -510,7 +518,7 @@ impl KinesisCheckpointer {
             )
             .send()
             .await
-            .map_err(|e| format!("DynamoDB UpdateItem error: {e}"))?;
+            .map_err(|e| format!("DynamoDB UpdateItem error: {}", DisplayErrorContext(&e)))?;
         Ok(())
     }
 
@@ -524,7 +532,7 @@ impl KinesisCheckpointer {
             .key("ShardID", AttributeValue::S(shard_id.to_string()))
             .send()
             .await
-            .map_err(|e| format!("DynamoDB DeleteItem error: {e}"))?;
+            .map_err(|e| format!("DynamoDB DeleteItem error: {}", DisplayErrorContext(&e)))?;
         Ok(())
     }
 }
