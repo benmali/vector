@@ -44,6 +44,8 @@ use crate::{
 const KINESIS_MAX_RECORDS: i32 = 10_000;
 const BACKOFF_INITIAL_MS: u64 = 300;
 const BACKOFF_MAX_MS: u64 = 5_000;
+// AWS enforces a hard limit of 5 GetRecords calls per shard per second.
+const GET_RECORDS_MIN_INTERVAL_MS: u64 = 200;
 
 /// Parsed stream entry from the config `streams` field.
 #[derive(Debug, Clone)]
@@ -588,6 +590,8 @@ impl KinesisStreamsSource {
 
         let mut backoff_ms = BACKOFF_INITIAL_MS;
         let mut last_commit = tokio::time::Instant::now();
+        let mut last_get_records =
+            tokio::time::Instant::now() - Duration::from_millis(GET_RECORDS_MIN_INTERVAL_MS);
         let mut shard_finished = false;
         let mut still_owned = true;
 
@@ -627,6 +631,17 @@ impl KinesisStreamsSource {
                     _ = cancel.cancelled() => { break; }
                 }
             }
+
+            // Enforce a maximum of 5 GetRecords calls per shard per second.
+            let elapsed = last_get_records.elapsed();
+            let min_interval = Duration::from_millis(GET_RECORDS_MIN_INTERVAL_MS);
+            if elapsed < min_interval {
+                select! {
+                    _ = sleep(min_interval - elapsed) => {}
+                    _ = cancel.cancelled() => { break; }
+                }
+            }
+            last_get_records = tokio::time::Instant::now();
 
             let get_result = self
                 .kinesis
