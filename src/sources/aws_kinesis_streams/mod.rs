@@ -130,6 +130,16 @@ pub struct AwsKinesisStreamsConfig {
     #[derivative(Default(value = "default_start_from_oldest()"))]
     pub start_from_oldest: bool,
 
+    /// Maximum number of records to request per `GetRecords` call (1–10,000).
+    ///
+    /// Lower values keep each response well within the 2 MiB/sec per-shard read budget,
+    /// reducing the risk of `ProvisionedThroughputExceededException`.  Higher values
+    /// may improve throughput on low-volume shards at the cost of larger bursts.
+    /// Values above 10,000 are silently capped to 10,000 by the source.
+    #[serde(default = "default_max_records_per_call")]
+    #[derivative(Default(value = "default_max_records_per_call()"))]
+    pub max_records_per_call: i32,
+
     #[configurable(derived)]
     #[serde(default = "default_framing_message_based")]
     #[derivative(Default(value = "default_framing_message_based()"))]
@@ -171,6 +181,10 @@ const fn default_rebalance_period_secs() -> u64 {
 
 const fn default_start_from_oldest() -> bool {
     true
+}
+
+const fn default_max_records_per_call() -> i32 {
+    1_000
 }
 
 impl_generate_config_from_default!(AwsKinesisStreamsConfig);

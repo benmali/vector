@@ -46,6 +46,12 @@ const BACKOFF_INITIAL_MS: u64 = 300;
 const BACKOFF_MAX_MS: u64 = 5_000;
 // AWS enforces a hard limit of 5 GetRecords calls per shard per second.
 const GET_RECORDS_MIN_INTERVAL_MS: u64 = 200;
+// Per-shard read throughput budget: 2 MiB/sec sliding average.
+// A GetRecords response of N bytes consumes N/2MiB seconds of read budget.
+const SHARD_READ_BUDGET_BYTES_PER_SEC: u64 = 2 * 1024 * 1024;
+// Backoff for ProvisionedThroughputExceededException: start at 1s (AWS recommendation), cap at 10s.
+const THROTTLE_BACKOFF_INITIAL_MS: u64 = 1_000;
+const THROTTLE_BACKOFF_MAX_MS: u64 = 10_000;
 
 /// Parsed stream entry from the config `streams` field.
 #[derive(Debug, Clone)]
@@ -475,8 +481,9 @@ impl KinesisStreamsSource {
                 break;
             }
 
+            let jitter = Duration::from_millis(simple_rand() as u64 % 5_000);
             select! {
-                _ = sleep(rebalance_interval) => {}
+                _ = sleep(rebalance_interval + jitter) => {}
                 _ = cancel.cancelled() => { break; }
             }
         }
@@ -560,6 +567,13 @@ impl KinesisStreamsSource {
             client_id = %self.client_id,
         );
 
+        // Stagger startup across shard consumers to avoid synchronized GetRecords bursts.
+        let startup_jitter = Duration::from_millis(simple_rand() as u64 % 500);
+        select! {
+            _ = sleep(startup_jitter) => {}
+            _ = cancel.cancelled() => { return; }
+        }
+
         let commit_period = Duration::from_secs(self.config.commit_period_secs);
 
         let tracker = Arc::new(SequenceTracker::new(
@@ -589,9 +603,12 @@ impl KinesisStreamsSource {
         };
 
         let mut backoff_ms = BACKOFF_INITIAL_MS;
+        let mut throttle_backoff_ms = THROTTLE_BACKOFF_INITIAL_MS;
         let mut last_commit = tokio::time::Instant::now();
-        let mut last_get_records =
-            tokio::time::Instant::now() - Duration::from_millis(GET_RECORDS_MIN_INTERVAL_MS);
+        // Delay to wait before the next GetRecords call.  Updated adaptively based on
+        // response size (throughput budget) or error type.  Starts at the minimum 200ms
+        // to satisfy the 5 calls/sec hard limit.
+        let mut next_call_delay = Duration::from_millis(GET_RECORDS_MIN_INTERVAL_MS);
         let mut shard_finished = false;
         let mut still_owned = true;
 
@@ -632,34 +649,49 @@ impl KinesisStreamsSource {
                 }
             }
 
-            // Enforce a maximum of 5 GetRecords calls per shard per second.
-            let elapsed = last_get_records.elapsed();
-            let min_interval = Duration::from_millis(GET_RECORDS_MIN_INTERVAL_MS);
-            if elapsed < min_interval {
-                select! {
-                    _ = sleep(min_interval - elapsed) => {}
-                    _ = cancel.cancelled() => { break; }
-                }
+            // Adaptive pacing: wait based on throughput budget consumed by the previous
+            // response.  Enforces the 5 calls/sec hard limit (min 200ms) and additionally
+            // backs off proportionally when a response consumed a large fraction of the
+            // 2 MiB/sec per-shard sliding budget.
+            select! {
+                _ = sleep(next_call_delay) => {}
+                _ = cancel.cancelled() => { break; }
             }
-            last_get_records = tokio::time::Instant::now();
 
             let get_result = self
                 .kinesis
                 .get_records()
                 .stream_arn(&stream.arn)
                 .shard_iterator(&iter)
-                .limit(KINESIS_MAX_RECORDS)
+                .limit(self.config.max_records_per_call.min(KINESIS_MAX_RECORDS))
                 .send()
                 .await;
 
             match get_result {
                 Err(e) => {
+                    let is_throughput_exceeded = e
+                        .as_service_error()
+                        .map(|se| se.is_provisioned_throughput_exceeded_exception())
+                        .unwrap_or(false);
                     let is_expired = e
                         .as_service_error()
                         .map(|se| se.is_expired_iterator_exception())
                         .unwrap_or(false);
 
-                    if is_expired {
+                    if is_throughput_exceeded {
+                        // Use a dedicated backoff starting at 1s (AWS recommendation).
+                        // The sleep happens at the top of the next loop iteration.
+                        let jitter_ms = simple_rand() as u64 % (throttle_backoff_ms / 2).max(1);
+                        let delay_ms = throttle_backoff_ms + jitter_ms;
+                        warn!(
+                            message = "Kinesis read throughput exceeded; backing off.",
+                            shard = %shard_id,
+                            delay_ms = delay_ms,
+                        );
+                        next_call_delay = Duration::from_millis(delay_ms);
+                        throttle_backoff_ms = (throttle_backoff_ms * 2).min(THROTTLE_BACKOFF_MAX_MS);
+                        continue;
+                    } else if is_expired {
                         warn!(message = "Shard iterator expired, refreshing.", shard = %shard_id);
                         let seq = tracker.acked_sequence();
                         match self
@@ -673,6 +705,7 @@ impl KinesisStreamsSource {
                         {
                             Ok(new_iter) => {
                                 iter = new_iter;
+                                next_call_delay = Duration::from_millis(GET_RECORDS_MIN_INTERVAL_MS);
                                 continue;
                             }
                             Err(re) => {
@@ -687,12 +720,9 @@ impl KinesisStreamsSource {
                         );
                     }
 
-                    let delay = Duration::from_millis(backoff_ms);
+                    let jitter_ms = simple_rand() as u64 % (backoff_ms / 2).max(1);
+                    next_call_delay = Duration::from_millis(backoff_ms + jitter_ms);
                     backoff_ms = (backoff_ms * 2).min(BACKOFF_MAX_MS);
-                    select! {
-                        _ = sleep(delay) => {}
-                        _ = cancel.cancelled() => { break; }
-                    }
                     continue;
                 }
                 Ok(output) => {
@@ -703,19 +733,32 @@ impl KinesisStreamsSource {
 
                     let records = output.records;
                     if records.is_empty() {
-                        let delay = Duration::from_millis(backoff_ms);
+                        // Shard is caught up; back off before the next poll.
+                        // The sleep happens at the top of the next loop iteration.
+                        let jitter_ms = simple_rand() as u64 % (backoff_ms / 2).max(1);
+                        next_call_delay = Duration::from_millis(backoff_ms + jitter_ms);
                         backoff_ms = (backoff_ms * 2).min(BACKOFF_MAX_MS);
-                        select! {
-                            _ = sleep(delay) => {}
-                            _ = cancel.cancelled() => { break; }
-                        }
                         if shard_finished {
                             break;
                         }
                         continue;
                     }
 
+                    // Successful read with data: reset error backoffs and compute
+                    // throughput-aware pacing.  A response of N bytes consumes N/2MiB
+                    // seconds of the per-shard read budget, so wait at least that long
+                    // before issuing the next call (minimum 200ms for the 5 calls/sec limit).
                     backoff_ms = BACKOFF_INITIAL_MS;
+                    throttle_backoff_ms = THROTTLE_BACKOFF_INITIAL_MS;
+                    let response_bytes: u64 = records
+                        .iter()
+                        .map(|r| r.data().as_ref().len() as u64)
+                        .sum();
+                    let budget_ms = (response_bytes as f64
+                        / SHARD_READ_BUDGET_BYTES_PER_SEC as f64
+                        * 1000.0) as u64;
+                    next_call_delay =
+                        Duration::from_millis(budget_ms.max(GET_RECORDS_MIN_INTERVAL_MS));
 
                     let record_count = records.len() as i64;
 
