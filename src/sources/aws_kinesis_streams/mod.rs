@@ -140,6 +140,17 @@ pub struct AwsKinesisStreamsConfig {
     #[derivative(Default(value = "default_max_records_per_call()"))]
     pub max_records_per_call: i32,
 
+    /// Minimum milliseconds to wait between consecutive `GetRecords` calls on a single shard.
+    ///
+    /// AWS enforces a hard limit of 5 `GetRecords` calls per second per shard. The default
+    /// of 1000 ms matches the KCL `idleTimeBetweenReadsInMillis` default and leaves
+    /// headroom for other consumers sharing the same shard. Accepted range: 200–1000.
+    /// Values below 200 are clamped to 200 (the minimum safe interval); values above
+    /// 1000 are clamped to 1000.
+    #[serde(default = "default_poll_interval_ms")]
+    #[derivative(Default(value = "default_poll_interval_ms()"))]
+    pub poll_interval_ms: u64,
+
     #[configurable(derived)]
     #[serde(default = "default_framing_message_based")]
     #[derivative(Default(value = "default_framing_message_based()"))]
@@ -184,6 +195,10 @@ const fn default_start_from_oldest() -> bool {
 }
 
 const fn default_max_records_per_call() -> i32 {
+    1_000
+}
+
+const fn default_poll_interval_ms() -> u64 {
     1_000
 }
 

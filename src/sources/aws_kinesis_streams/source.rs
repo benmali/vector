@@ -46,6 +46,8 @@ const BACKOFF_INITIAL_MS: u64 = 300;
 const BACKOFF_MAX_MS: u64 = 5_000;
 // AWS enforces a hard limit of 5 GetRecords calls per shard per second.
 const GET_RECORDS_MIN_INTERVAL_MS: u64 = 200;
+// Maximum configurable poll interval, matching the KCL idleTimeBetweenReadsInMillis default.
+const POLL_INTERVAL_MAX_MS: u64 = 1_000;
 // Per-shard read throughput budget: 2 MiB/sec sliding average.
 // A GetRecords response of N bytes consumes N/2MiB seconds of read budget.
 const SHARD_READ_BUDGET_BYTES_PER_SEC: u64 = 2 * 1024 * 1024;
@@ -574,6 +576,14 @@ impl KinesisStreamsSource {
             _ = cancel.cancelled() => { return; }
         }
 
+        // Clamp the user-configured poll interval to the [200, 1000] ms range.
+        // 200ms is the floor imposed by the AWS hard limit of 5 GetRecords/sec/shard.
+        // 1000ms is the ceiling, matching the KCL idleTimeBetweenReadsInMillis default.
+        let poll_floor_ms = self
+            .config
+            .poll_interval_ms
+            .clamp(GET_RECORDS_MIN_INTERVAL_MS, POLL_INTERVAL_MAX_MS);
+
         let commit_period = Duration::from_secs(self.config.commit_period_secs);
 
         let tracker = Arc::new(SequenceTracker::new(
@@ -602,13 +612,13 @@ impl KinesisStreamsSource {
             }
         };
 
-        let mut backoff_ms = BACKOFF_INITIAL_MS;
+        let mut backoff_ms = poll_floor_ms;
         let mut throttle_backoff_ms = THROTTLE_BACKOFF_INITIAL_MS;
         let mut last_commit = tokio::time::Instant::now();
         // Delay to wait before the next GetRecords call.  Updated adaptively based on
-        // response size (throughput budget) or error type.  Starts at the minimum 200ms
-        // to satisfy the 5 calls/sec hard limit.
-        let mut next_call_delay = Duration::from_millis(GET_RECORDS_MIN_INTERVAL_MS);
+        // response size (throughput budget) or error type.  Starts at poll_floor_ms
+        // (clamped to [200, 1000] ms) to respect the configured polling interval.
+        let mut next_call_delay = Duration::from_millis(poll_floor_ms);
         let mut shard_finished = false;
         let mut still_owned = true;
 
@@ -705,7 +715,7 @@ impl KinesisStreamsSource {
                         {
                             Ok(new_iter) => {
                                 iter = new_iter;
-                                next_call_delay = Duration::from_millis(GET_RECORDS_MIN_INTERVAL_MS);
+                                next_call_delay = Duration::from_millis(poll_floor_ms);
                                 continue;
                             }
                             Err(re) => {
@@ -747,8 +757,8 @@ impl KinesisStreamsSource {
                     // Successful read with data: reset error backoffs and compute
                     // throughput-aware pacing.  A response of N bytes consumes N/2MiB
                     // seconds of the per-shard read budget, so wait at least that long
-                    // before issuing the next call (minimum 200ms for the 5 calls/sec limit).
-                    backoff_ms = BACKOFF_INITIAL_MS;
+                    // before issuing the next call (floored at poll_floor_ms).
+                    backoff_ms = poll_floor_ms;
                     throttle_backoff_ms = THROTTLE_BACKOFF_INITIAL_MS;
                     let response_bytes: u64 = records
                         .iter()
@@ -757,8 +767,7 @@ impl KinesisStreamsSource {
                     let budget_ms = (response_bytes as f64
                         / SHARD_READ_BUDGET_BYTES_PER_SEC as f64
                         * 1000.0) as u64;
-                    next_call_delay =
-                        Duration::from_millis(budget_ms.max(GET_RECORDS_MIN_INTERVAL_MS));
+                    next_call_delay = Duration::from_millis(budget_ms.max(poll_floor_ms));
 
                     let record_count = records.len() as i64;
 
