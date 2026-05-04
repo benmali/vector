@@ -59,6 +59,11 @@ pub struct DynamoDbCheckpointConfig {
     /// Only used when `create` is true and `billing_mode` is `PROVISIONED`.
     #[serde(default)]
     pub write_capacity_units: i64,
+
+    /// How often (in seconds) to persist the latest consumed sequence number to DynamoDB.
+    #[serde(default = "default_commit_period_secs")]
+    #[derivative(Default(value = "default_commit_period_secs()"))]
+    pub commit_period_secs: u64,
 }
 
 fn default_billing_mode() -> String {
@@ -106,11 +111,6 @@ pub struct AwsKinesisStreamsConfig {
     #[serde(default = "default_checkpoint_limit")]
     #[derivative(Default(value = "default_checkpoint_limit()"))]
     pub checkpoint_limit: u32,
-
-    /// How often (in seconds) to persist the latest consumed sequence number to DynamoDB.
-    #[serde(default = "default_commit_period_secs")]
-    #[derivative(Default(value = "default_commit_period_secs()"))]
-    pub commit_period_secs: u64,
 
     /// How long (in seconds) before a consumer that has not updated its checkpoint
     /// is considered inactive and its shards become eligible for re-claiming.
@@ -179,7 +179,7 @@ const fn default_checkpoint_limit() -> u32 {
 }
 
 const fn default_commit_period_secs() -> u64 {
-    5
+    60
 }
 
 const fn default_lease_period_secs() -> u64 {

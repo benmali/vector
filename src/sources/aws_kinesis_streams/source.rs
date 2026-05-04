@@ -11,7 +11,7 @@ use aws_sdk_dynamodb::Client as DynamoDbClient;
 use aws_sdk_kinesis::{
     Client as KinesisClient,
     error::DisplayErrorContext,
-    types::{Shard, ShardIteratorType},
+    types::{Record, Shard, ShardIteratorType},
 };
 use chrono::{TimeZone, Utc};
 use tokio::select;
@@ -584,7 +584,8 @@ impl KinesisStreamsSource {
             .poll_interval_ms
             .clamp(GET_RECORDS_MIN_INTERVAL_MS, POLL_INTERVAL_MAX_MS);
 
-        let commit_period = Duration::from_secs(self.config.commit_period_secs);
+        let commit_period =
+            Duration::from_secs(self.config.dynamodb.commit_period_secs.clamp(1, 1000));
 
         let tracker = Arc::new(SequenceTracker::new(
             self.config.checkpoint_limit,
@@ -651,8 +652,11 @@ impl KinesisStreamsSource {
                 last_commit = tokio::time::Instant::now();
             }
 
-            // Back-pressure: wait while the in-flight cap is full.
-            if !tracker.can_accept(1) {
+            // Back-pressure: wait until there is room for a full batch before
+            // issuing the next GetRecords call.  Checking for max_records_per_call
+            // rather than 1 prevents the in-flight count from significantly
+            // exceeding checkpoint_limit when large batches are returned.
+            if !tracker.can_accept(self.config.max_records_per_call as i64) {
                 select! {
                     _ = sleep(Duration::from_millis(10)) => { continue; }
                     _ = cancel.cancelled() => { break; }
@@ -771,121 +775,23 @@ impl KinesisStreamsSource {
 
                     let record_count = records.len() as i64;
 
-                    // Decode each record into events.
+                    // Decode each record into events, isolating failures per-record so
+                    // that a single malformed record (poison pill) cannot stall or kill
+                    // the shard consumer.
                     let mut all_events: Vec<Event> = Vec::with_capacity(records.len());
                     let mut last_sequence = String::new();
 
                     for record in &records {
-                        let data = record.data().as_ref().to_vec();
-                        let timestamp = record.approximate_arrival_timestamp().and_then(|ts| {
-                            let secs = ts.secs();
-                            let nanos = ts.subsec_nanos();
-                            Utc.timestamp_opt(secs, nanos).single()
-                        });
-
-                        let schema = log_schema();
-                        let partition_key = record.partition_key().to_string();
                         let seq_num = record.sequence_number().to_string();
-
-                        let mut buf = bytes::BytesMut::from(data.as_slice());
-                        let mut decoder = self.decoder.clone();
-
-                        loop {
-                            match decoder.decode_eof(&mut buf) {
-                                Ok(Some((decoded, _))) => {
-                                    for mut event in decoded {
-                                        if let Event::Log(ref mut log) = event {
-                                            match self.log_namespace {
-                                                LogNamespace::Vector => {
-                                                    if let Some(ts) = timestamp {
-                                                        log.try_insert(
-                                                            metadata_path!(
-                                                                "aws_kinesis_streams",
-                                                                "timestamp"
-                                                            ),
-                                                            ts,
-                                                        );
-                                                    }
-                                                    log.insert(
-                                                        metadata_path!("vector", "ingest_timestamp"),
-                                                        Utc::now(),
-                                                    );
-                                                    log.try_insert(
-                                                        metadata_path!(
-                                                            "aws_kinesis_streams",
-                                                            "kinesis_stream"
-                                                        ),
-                                                        stream.id.clone(),
-                                                    );
-                                                    log.try_insert(
-                                                        metadata_path!(
-                                                            "aws_kinesis_streams",
-                                                            "kinesis_shard"
-                                                        ),
-                                                        shard_id.clone(),
-                                                    );
-                                                    log.try_insert(
-                                                        metadata_path!(
-                                                            "aws_kinesis_streams",
-                                                            "kinesis_partition_key"
-                                                        ),
-                                                        partition_key.clone(),
-                                                    );
-                                                    log.try_insert(
-                                                        metadata_path!(
-                                                            "aws_kinesis_streams",
-                                                            "kinesis_sequence_number"
-                                                        ),
-                                                        seq_num.clone(),
-                                                    );
-                                                }
-                                                LogNamespace::Legacy => {
-                                                    if let Some(ts) = timestamp {
-                                                        if let Some(timestamp_key) =
-                                                            schema.timestamp_key()
-                                                        {
-                                                            log.try_insert(
-                                                                (PathPrefix::Event, timestamp_key),
-                                                                ts,
-                                                            );
-                                                        }
-                                                    }
-                                                    log.try_insert(
-                                                        "kinesis_stream",
-                                                        stream.id.clone(),
-                                                    );
-                                                    log.try_insert(
-                                                        "kinesis_shard",
-                                                        shard_id.clone(),
-                                                    );
-                                                    log.try_insert(
-                                                        "kinesis_partition_key",
-                                                        partition_key.clone(),
-                                                    );
-                                                    log.try_insert(
-                                                        "kinesis_sequence_number",
-                                                        seq_num.clone(),
-                                                    );
-                                                }
-                                            }
-                                        }
-
-                                        events_received.emit(CountByteSize(
-                                            1,
-                                            event.estimated_json_encoded_size_of(),
-                                        ));
-                                        all_events.push(event);
-                                    }
-                                }
-                                Ok(None) => break,
-                                Err(e) => {
-                                    if !e.can_continue() {
-                                        break;
-                                    }
-                                }
-                            }
+                        let record_events =
+                            self.decode_record(record, &stream.id, &shard_id);
+                        for event in &record_events {
+                            events_received.emit(CountByteSize(
+                                1,
+                                event.estimated_json_encoded_size_of(),
+                            ));
                         }
-
+                        all_events.extend(record_events);
                         last_sequence = seq_num;
                     }
 
@@ -960,6 +866,129 @@ impl KinesisStreamsSource {
             stream = %stream.id,
             shard = %shard_id,
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // Per-record decoding
+    // -------------------------------------------------------------------------
+
+    /// Decode a single Kinesis record into events, inserting stream/shard metadata.
+    ///
+    /// Failures are isolated here: a record that cannot be decoded produces zero
+    /// events and logs a warning rather than propagating an error to the caller.
+    /// This is the equivalent of Logstash's `rescue => error` around `process_record`,
+    /// ensuring that one malformed record cannot kill the entire shard consumer.
+    fn decode_record(
+        &self,
+        record: &Record,
+        stream_id: &str,
+        shard_id: &str,
+    ) -> Vec<Event> {
+        let data = record.data().as_ref().to_vec();
+        let timestamp = record.approximate_arrival_timestamp().and_then(|ts| {
+            let secs = ts.secs();
+            let nanos = ts.subsec_nanos();
+            Utc.timestamp_opt(secs, nanos).single()
+        });
+
+        let schema = log_schema();
+        let partition_key = record.partition_key().to_string();
+        let seq_num = record.sequence_number().to_string();
+
+        let mut buf = bytes::BytesMut::from(data.as_slice());
+        let mut decoder = self.decoder.clone();
+        let mut events: Vec<Event> = Vec::new();
+
+        loop {
+            match decoder.decode_eof(&mut buf) {
+                Ok(Some((decoded, _))) => {
+                    for mut event in decoded {
+                        if let Event::Log(ref mut log) = event {
+                            match self.log_namespace {
+                                LogNamespace::Vector => {
+                                    if let Some(ts) = timestamp {
+                                        log.try_insert(
+                                            metadata_path!(
+                                                "aws_kinesis_streams",
+                                                "timestamp"
+                                            ),
+                                            ts,
+                                        );
+                                    }
+                                    log.insert(
+                                        metadata_path!("vector", "ingest_timestamp"),
+                                        Utc::now(),
+                                    );
+                                    log.try_insert(
+                                        metadata_path!(
+                                            "aws_kinesis_streams",
+                                            "kinesis_stream"
+                                        ),
+                                        stream_id.to_string(),
+                                    );
+                                    log.try_insert(
+                                        metadata_path!(
+                                            "aws_kinesis_streams",
+                                            "kinesis_shard"
+                                        ),
+                                        shard_id.to_string(),
+                                    );
+                                    log.try_insert(
+                                        metadata_path!(
+                                            "aws_kinesis_streams",
+                                            "kinesis_partition_key"
+                                        ),
+                                        partition_key.clone(),
+                                    );
+                                    log.try_insert(
+                                        metadata_path!(
+                                            "aws_kinesis_streams",
+                                            "kinesis_sequence_number"
+                                        ),
+                                        seq_num.clone(),
+                                    );
+                                }
+                                LogNamespace::Legacy => {
+                                    if let Some(ts) = timestamp {
+                                        if let Some(timestamp_key) = schema.timestamp_key() {
+                                            log.try_insert(
+                                                (PathPrefix::Event, timestamp_key),
+                                                ts,
+                                            );
+                                        }
+                                    }
+                                    log.try_insert("kinesis_stream", stream_id.to_string());
+                                    log.try_insert("kinesis_shard", shard_id.to_string());
+                                    log.try_insert(
+                                        "kinesis_partition_key",
+                                        partition_key.clone(),
+                                    );
+                                    log.try_insert(
+                                        "kinesis_sequence_number",
+                                        seq_num.clone(),
+                                    );
+                                }
+                            }
+                        }
+                        events.push(event);
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    if !e.can_continue() {
+                        warn!(
+                            message = "Failed to decode Kinesis record; skipping.",
+                            shard = %shard_id,
+                            sequence = %seq_num,
+                            error = %e,
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+
+        events
     }
 }
 
