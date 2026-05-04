@@ -42,7 +42,6 @@ use crate::{
 };
 
 const KINESIS_MAX_RECORDS: i32 = 10_000;
-const BACKOFF_INITIAL_MS: u64 = 300;
 const BACKOFF_MAX_MS: u64 = 5_000;
 // AWS enforces a hard limit of 5 GetRecords calls per shard per second.
 const GET_RECORDS_MIN_INTERVAL_MS: u64 = 200;
