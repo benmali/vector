@@ -19,6 +19,7 @@ use tokio::task::JoinSet;
 use tokio::time::sleep;
 use tokio_util::codec::Decoder as _;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 use uuid::Uuid;
 use vector_lib::{
     codecs::StreamDecodingError,
@@ -410,12 +411,15 @@ impl KinesisStreamsSource {
                                 let cancel2 = cancel.clone();
                                 let stream2 = stream.clone();
                                 let shard_id2 = shard_id.clone();
-                                task_set.spawn(async move {
-                                    src.run_shard_consumer(
-                                        stream2, shard_id2, seq, chk, out2, cancel2,
-                                    )
-                                    .await;
-                                });
+                                task_set.spawn(
+                                    async move {
+                                        src.run_shard_consumer(
+                                            stream2, shard_id2, seq, chk, out2, cancel2,
+                                        )
+                                        .await;
+                                    }
+                                    .in_current_span(),
+                                );
                             }
                             Err(CheckpointerError::LeaseNotAcquired) => {}
                             Err(e) => {
@@ -452,12 +456,15 @@ impl KinesisStreamsSource {
                                     let cancel2 = cancel.clone();
                                     let stream2 = stream.clone();
                                     let shard_id2 = to_steal.shard_id.clone();
-                                    task_set.spawn(async move {
-                                        src.run_shard_consumer(
-                                            stream2, shard_id2, seq, chk, out2, cancel2,
-                                        )
-                                        .await;
-                                    });
+                                    task_set.spawn(
+                                        async move {
+                                            src.run_shard_consumer(
+                                                stream2, shard_id2, seq, chk, out2, cancel2,
+                                            )
+                                            .await;
+                                        }
+                                        .in_current_span(),
+                                    );
                                     break 'steal;
                                 }
                                 Err(CheckpointerError::LeaseNotAcquired) => {}
@@ -521,10 +528,13 @@ impl KinesisStreamsSource {
                         let chk = Arc::clone(&checkpointer);
                         let out2 = out.clone();
                         let cancel2 = cancel.clone();
-                        task_set.spawn(async move {
-                            src.run_shard_consumer(stream, shard_id, seq, chk, out2, cancel2)
-                                .await;
-                        });
+                        task_set.spawn(
+                            async move {
+                                src.run_shard_consumer(stream, shard_id, seq, chk, out2, cancel2)
+                                    .await;
+                            }
+                            .in_current_span(),
+                        );
                     }
                     Err(e) => {
                         if cancel.is_cancelled() {

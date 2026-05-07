@@ -1,14 +1,18 @@
-//! Azure Entra ID authentication for Azure Data Explorer.
+//! Azure authentication for Azure Data Explorer.
 //!
-//! Uses [`azure_identity::ClientSecretCredential`] (from the official Azure SDK
-//! for Rust) for service-principal client-credentials authentication, rather
-//! than a hand-rolled OAuth2 flow.
+//! Delegates to [`crate::sinks::azure_common::config::AzureAuthentication`] to obtain an
+//! [`azure_core::credentials::TokenCredential`], then acquires Bearer tokens scoped to the
+//! Kusto API (`https://kusto.kusto.windows.net/.default`).
+//!
+//! Supports all credential kinds provided by `azure_common`:
+//! `client_secret_credential`, `managed_identity`, `workload_identity`,
+//! `azure_cli`, `client_certificate_credential`, `managed_identity_client_assertion`.
 
 use std::sync::Arc;
 
-use azure_core::credentials::{Secret, TokenCredential};
-use azure_identity::ClientSecretCredential;
-use vector_lib::sensitive_string::SensitiveString;
+use azure_core::credentials::TokenCredential;
+
+use crate::sinks::azure_common::config::AzureAuthentication;
 
 /// Scope for Azure Data Explorer / Kusto API access.
 const KUSTO_SCOPE: &str = "https://kusto.kusto.windows.net/.default";
@@ -24,19 +28,19 @@ trait TokenProvider: Send + Sync {
     async fn get_bearer_token(&self) -> crate::Result<String>;
 }
 
-/// Production token provider backed by [`ClientSecretCredential`].
-struct EntraTokenProvider {
-    credential: Arc<ClientSecretCredential>,
+/// Production token provider backed by any `azure_common::AzureAuthentication` variant.
+struct AzureCommonTokenProvider {
+    credential: Arc<dyn TokenCredential>,
 }
 
 #[async_trait::async_trait]
-impl TokenProvider for EntraTokenProvider {
+impl TokenProvider for AzureCommonTokenProvider {
     async fn get_bearer_token(&self) -> crate::Result<String> {
         let access_token = self
             .credential
             .get_token(&[KUSTO_SCOPE], None)
             .await
-            .map_err(|e| format!("Failed to acquire Azure Entra token: {e}"))?;
+            .map_err(|e| format!("Failed to acquire Azure token for Kusto: {e}"))?;
 
         Ok(access_token.token.secret().to_string())
     }
@@ -46,29 +50,26 @@ impl TokenProvider for EntraTokenProvider {
 // Public auth wrapper
 // ---------------------------------------------------------------------------
 
-/// Azure Entra ID token provider for Azure Data Explorer.
+/// Azure token provider for Azure Data Explorer.
 ///
-/// Wraps [`azure_identity::ClientSecretCredential`] to acquire Bearer tokens
-/// via the OAuth2 client-credentials flow.  Token caching and refresh are
-/// handled internally by the Azure SDK.
+/// Wraps any [`AzureAuthentication`] credential variant to acquire Bearer tokens
+/// scoped to the Kusto API. Token caching and refresh are handled internally
+/// by the Azure SDK.
 #[derive(Clone)]
 pub(super) struct AzureDataExplorerAuth {
     provider: Arc<dyn TokenProvider>,
 }
 
 impl AzureDataExplorerAuth {
-    /// Creates a new auth provider backed by [`ClientSecretCredential`].
-    pub(super) fn new(
-        tenant_id: &str,
-        client_id: String,
-        client_secret: SensitiveString,
-    ) -> crate::Result<Self> {
-        let secret = Secret::from(client_secret.inner().to_string());
-        let credential = ClientSecretCredential::new(tenant_id, client_id, secret, None)
-            .map_err(|e| format!("Failed to create Azure credential: {e}"))?;
+    /// Creates a new auth provider from an [`AzureAuthentication`] config value.
+    pub(super) async fn new(auth: &AzureAuthentication) -> crate::Result<Self> {
+        let credential = auth
+            .credential()
+            .await
+            .map_err(|e| format!("Failed to create Azure credential for Kusto: {e}"))?;
 
         Ok(Self {
-            provider: Arc::new(EntraTokenProvider { credential }),
+            provider: Arc::new(AzureCommonTokenProvider { credential }),
         })
     }
 
