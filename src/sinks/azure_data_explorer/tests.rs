@@ -18,8 +18,12 @@ use crate::{
     http::HttpClient,
     sinks::{
         prelude::*,
-        util::{http::http_response_retry_logic, service::GlobalTowerRequestConfigDefaults},
+        util::{
+            http::{RetryStrategy, http_response_retry_logic},
+            service::GlobalTowerRequestConfigDefaults,
+        },
     },
+    template::{ConfinementConfig, Template},
     test_util::{
         components::{HTTP_SINK_TAGS, run_and_assert_sink_compliance},
         http::spawn_blackhole_http_server,
@@ -275,6 +279,16 @@ fn make_log_event(fields: &[(&str, &str)]) -> Event {
     Event::Log(log)
 }
 
+fn confine_table(raw: &str) -> ConfinedTemplate {
+    let template: Template = raw.try_into().expect("valid template");
+    let confinement = ConfinementConfig {
+        dangerously_allow_unconfined_template_resolution: true,
+    };
+    template
+        .confine(&confinement, "azure_data_explorer", "table")
+        .expect("table template")
+}
+
 fn make_partitioner(
     table_field: Option<&str>,
     table: Option<&str>,
@@ -282,7 +296,7 @@ fn make_partitioner(
 ) -> AdxPartitioner {
     AdxPartitioner {
         table_field: table_field.map(String::from),
-        table: table.map(|s| s.try_into().expect("valid template")),
+        table: table.map(confine_table),
         default_table: default_table.map(String::from),
     }
 }
@@ -369,7 +383,10 @@ async fn component_spec_compliance_streaming() {
     let request_limits =
         TowerRequestConfig::<GlobalTowerRequestConfigDefaults>::default().into_settings();
     let service = ServiceBuilder::new()
-        .settings(request_limits, http_response_retry_logic())
+        .settings(
+            request_limits,
+            http_response_retry_logic(RetryStrategy::default()),
+        )
         .service(service);
 
     let batch_settings = BatchConfig::<super::config::StreamingBatchSettings>::default()
@@ -380,7 +397,7 @@ async fn component_spec_compliance_streaming() {
 
     let partitioner = AdxPartitioner {
         table_field: None,
-        table: Some("testtable".try_into().unwrap()),
+        table: Some(confine_table("testtable")),
         default_table: None,
     };
 

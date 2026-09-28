@@ -83,7 +83,6 @@ pub struct AwsKinesisStreamsConfig {
     #[serde(flatten)]
     pub region: RegionOrEndpoint,
 
-    #[configurable(derived)]
     #[serde(default)]
     pub auth: AwsAuthentication,
 
@@ -154,21 +153,17 @@ pub struct AwsKinesisStreamsConfig {
     #[derivative(Default(value = "default_poll_interval_ms()"))]
     pub poll_interval_ms: u64,
 
-    #[configurable(derived)]
     #[serde(default = "default_framing_message_based")]
     #[derivative(Default(value = "default_framing_message_based()"))]
     pub framing: FramingConfig,
 
-    #[configurable(derived)]
     #[serde(default = "default_decoding")]
     #[derivative(Default(value = "default_decoding()"))]
     pub decoding: DeserializerConfig,
 
-    #[configurable(derived)]
     #[serde(default, deserialize_with = "bool_or_struct")]
     pub acknowledgements: SourceAcknowledgementsConfig,
 
-    #[configurable(derived)]
     pub tls: Option<TlsConfig>,
 
     /// Overrides the global log namespace setting for this source.
