@@ -1073,7 +1073,11 @@ aws-cloudwatch-metrics-integration-tests = ["sinks-aws_cloudwatch_metrics"]
 aws-ec2-metadata-integration-tests = ["transforms-aws_ec2_metadata"]
 aws-ecs-metrics-integration-tests = ["sources-aws_ecs_metrics"]
 aws-kinesis-firehose-integration-tests = ["sinks-aws_kinesis_firehose", "dep:aws-sdk-elasticsearch", "sinks-elasticsearch"]
-aws-kinesis-streams-integration-tests = ["sinks-aws_kinesis_streams"]
+aws-kinesis-streams-source-integration-tests = ["sources-aws_kinesis_streams"]
+aws-kinesis-streams-integration-tests = [
+  "sinks-aws_kinesis_streams",
+  "aws-kinesis-streams-source-integration-tests",
+]
 aws-s3-integration-tests = ["sinks-aws_s3", "sources-aws_s3"]
 aws-sqs-integration-tests = ["sinks-aws_sqs"]
 aws-sns-integration-tests = ["sinks-aws_sns"]

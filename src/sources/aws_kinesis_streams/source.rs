@@ -444,11 +444,9 @@ impl KinesisStreamsSource {
                 };
 
                 // KCL 3.0 lease eligibility: never claim SHARD_END; never claim a
-                // child until its parents are completed. A closed shard with no row
-                // is claimed only on an empty table when starting from the oldest
-                // record. After that, a missing row means the lease was cleaned up.
-                let checkpoint_table_empty = checkpoint_data.shards_with_checkpoints.is_empty();
-                let start_from_oldest = self.config.start_from_oldest;
+                // child until its parents are completed. A still-listed closed
+                // shard with no row is claimed so a generation split before it was
+                // leased is not skipped.
                 let mut unclaimed: HashMap<String, String> = HashMap::new();
                 let mut closed_by_id: HashMap<String, bool> = HashMap::new();
                 let mut parent_ids_by_shard: HashMap<String, Vec<String>> = HashMap::new();
@@ -468,11 +466,13 @@ impl KinesisStreamsSource {
                     shard_parent_pairs.push((shard_id.clone(), parents));
                     listed_ids.insert(shard_id);
                 }
+                let children_map = children_by_parent(&shard_parent_pairs);
                 for shard_id in listed_ids.clone() {
                     let parents = parent_ids_by_shard
                         .get(&shard_id)
                         .cloned()
                         .unwrap_or_default();
+                    let children = children_map.get(&shard_id).cloned().unwrap_or_default();
                     let sequence = checkpoint_data.sequence_numbers.get(&shard_id);
                     if should_claim_shard(
                         closed_by_id.get(&shard_id).copied().unwrap_or(false),
@@ -481,16 +481,13 @@ impl KinesisStreamsSource {
                             .contains_key(&shard_id),
                         sequence.map(String::as_str),
                         &parents,
+                        &children,
                         &checkpoint_data.sequence_numbers,
                         &listed_ids,
-                        checkpoint_table_empty,
-                        start_from_oldest,
                     ) {
                         unclaimed.insert(shard_id, String::new());
                     }
                 }
-
-                let children_map = children_by_parent(&shard_parent_pairs);
 
                 // Delete leftover rows for shards ListShards no longer returns
                 // (retention expired) and SHARD_END parents whose children have
@@ -560,6 +557,10 @@ impl KinesisStreamsSource {
                             .get(&claim.shard_id)
                             .cloned()
                             .unwrap_or_default();
+                        let children = children_map
+                            .get(&claim.shard_id)
+                            .cloned()
+                            .unwrap_or_default();
                         let sequence = checkpoint_data.sequence_numbers.get(&claim.shard_id);
                         let closed = closed_by_id.get(&claim.shard_id).copied().unwrap_or(false);
                         let eligible = should_claim_shard(
@@ -567,10 +568,9 @@ impl KinesisStreamsSource {
                             true,
                             sequence.map(String::as_str),
                             &parents,
+                            &children,
                             &checkpoint_data.sequence_numbers,
                             &listed_ids,
-                            checkpoint_table_empty,
-                            start_from_oldest,
                         );
 
                         if elapsed > lease_period * 2 && eligible {
@@ -650,6 +650,10 @@ impl KinesisStreamsSource {
                                 .get(&to_steal.shard_id)
                                 .cloned()
                                 .unwrap_or_default();
+                            let children = children_map
+                                .get(&to_steal.shard_id)
+                                .cloned()
+                                .unwrap_or_default();
                             let sequence = checkpoint_data.sequence_numbers.get(&to_steal.shard_id);
                             let closed = closed_by_id
                                 .get(&to_steal.shard_id)
@@ -660,10 +664,9 @@ impl KinesisStreamsSource {
                                 true,
                                 sequence.map(String::as_str),
                                 &parents,
+                                &children,
                                 &checkpoint_data.sequence_numbers,
                                 &listed_ids,
-                                checkpoint_table_empty,
-                                start_from_oldest,
                             ) {
                                 continue;
                             }
@@ -838,22 +841,33 @@ impl KinesisStreamsSource {
                     .iter()
                     .map(|shard| shard.shard_id().to_string())
                     .collect();
-                let table_empty = view.checkpoints.shards_with_checkpoints.is_empty();
                 let sequence = view.checkpoints.sequence_numbers.get(&shard_id);
                 let has_checkpoint = view
                     .checkpoints
                     .shards_with_checkpoints
                     .contains_key(&shard_id);
+                let children: Vec<String> = view
+                    .shards
+                    .iter()
+                    .filter(|candidate| {
+                        parent_ids(
+                            candidate.parent_shard_id(),
+                            candidate.adjacent_parent_shard_id(),
+                        )
+                        .iter()
+                        .any(|parent| parent == &shard_id)
+                    })
+                    .map(|candidate| candidate.shard_id().to_string())
+                    .collect();
 
                 if !should_claim_shard(
                     closed,
                     has_checkpoint,
                     sequence.map(String::as_str),
                     &blocking_parents,
+                    &children,
                     &view.checkpoints.sequence_numbers,
                     &listed_ids,
-                    table_empty,
-                    self.config.start_from_oldest,
                 ) {
                     still_pending.push((stream, shard_id));
                     continue;

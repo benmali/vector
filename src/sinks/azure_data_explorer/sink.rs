@@ -193,7 +193,8 @@ mod tests {
     fn make_log_event(fields: &[(&str, &str)]) -> Event {
         let mut log = LogEvent::default();
         for (k, v) in fields {
-            log.insert(*k, *v);
+            let field_path = vrl::path::parse_value_path(k).expect("event field path");
+            log.insert((PathPrefix::Event, &field_path), *v);
         }
         Event::Log(log)
     }

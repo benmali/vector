@@ -29,6 +29,8 @@ use crate::{
         http::spawn_blackhole_http_server,
     },
 };
+use vector_lib::lookup::PathPrefix;
+use vrl::event_path;
 
 // ---------------------------------------------------------------------------
 // Mock HTTP handlers
@@ -185,12 +187,12 @@ fn encoder_produces_jsonl_without_mutation() {
     };
 
     let mut event1 = LogEvent::default();
-    event1.insert("message", "hello world");
-    event1.insert("host", "server01");
+    event1.insert(event_path!("message"), "hello world");
+    event1.insert(event_path!("host"), "server01");
 
     let mut event2 = LogEvent::default();
-    event2.insert("message", "second event");
-    event2.insert("count", 42);
+    event2.insert(event_path!("message"), "second event");
+    event2.insert(event_path!("count"), 42);
 
     let events = vec![Event::Log(event1), Event::Log(event2)];
 
@@ -228,7 +230,7 @@ fn encoder_single_event_no_trailing_newline() {
     };
 
     let mut event = LogEvent::default();
-    event.insert("key", "value");
+    event.insert(event_path!("key"), "value");
 
     let events = vec![Event::Log(event)];
     let mut buf = Vec::new();
@@ -250,9 +252,9 @@ fn encoder_with_transformer_field_filtering() {
     let encoder = AzureDataExplorerEncoder { transformer };
 
     let mut event = LogEvent::default();
-    event.insert("message", "keep me");
-    event.insert("host", "drop me");
-    event.insert("extra", "also drop");
+    event.insert(event_path!("message"), "keep me");
+    event.insert(event_path!("host"), "drop me");
+    event.insert(event_path!("extra"), "also drop");
 
     let events = vec![Event::Log(event)];
     let mut buf = Vec::new();
@@ -274,7 +276,8 @@ fn encoder_with_transformer_field_filtering() {
 fn make_log_event(fields: &[(&str, &str)]) -> Event {
     let mut log = LogEvent::default();
     for (k, v) in fields {
-        log.insert(*k, *v);
+        let field_path = vrl::path::parse_value_path(k).expect("event field path");
+        log.insert((PathPrefix::Event, &field_path), *v);
     }
     Event::Log(log)
 }

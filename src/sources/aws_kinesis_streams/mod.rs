@@ -3,6 +3,9 @@ pub mod checkpointer;
 pub mod closed_shard;
 pub mod source;
 
+#[cfg(test)]
+mod integration_tests;
+
 use vector_lib::{
     codecs::decoding::{DeserializerConfig, FramingConfig},
     config::{LegacyKey, LogNamespace},

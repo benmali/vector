@@ -37,53 +37,57 @@ pub fn is_child_shard(parent_ids: &[String]) -> bool {
 
 /// KCL `BlockOnParentShardTask`.
 ///
-/// A parent with a non-`SHARD_END` checkpoint is still in progress. A missing row is
-/// unfinished only on an empty checkpoint table when `start_from_oldest` is set and
-/// the parent is still listed: that is KCL's first-start path. After any lease
-/// exists, a missing row means the parent was cleaned up or has expired, so children
-/// may start and the closed parent is not read again.
+/// A parent with a non-`SHARD_END` checkpoint is still in progress. A missing row
+/// for a parent that ListShards still returns is also unfinished: the parent may
+/// never have been leased (for example it was split again before a consumer claimed
+/// it). A missing row for a parent that is no longer listed means retention expired
+/// or the lease was cleaned up, so children may start.
 pub fn parents_completed(
     parent_ids: &[String],
     sequences: &HashMap<String, String>,
     listed_shard_ids: &HashSet<String>,
-    checkpoint_table_empty: bool,
-    start_from_oldest: bool,
 ) -> bool {
     parent_ids.iter().all(|parent| match sequences.get(parent) {
         Some(seq) => is_shard_end(seq),
-        None => !(checkpoint_table_empty && start_from_oldest && listed_shard_ids.contains(parent)),
+        None => !listed_shard_ids.contains(parent),
     })
+}
+
+/// Children have progressed far enough that a missing closed-parent lease is a
+/// completed-and-cleaned row, not an unconsumed generation.
+fn children_have_real_checkpoints(
+    child_ids: &[String],
+    sequences: &HashMap<String, String>,
+) -> bool {
+    !child_ids.is_empty()
+        && child_ids
+            .iter()
+            .all(|child| sequences.get(child).is_some_and(|seq| !seq.is_empty()))
 }
 
 /// Whether this shard may be leased this cycle (KCL 3.0 eligibility).
 ///
 /// Never claim `SHARD_END`. Never claim a child until its parents are completed.
-/// A closed shard with no row is claimed only when the checkpoint table is empty and
-/// `start_from_oldest` is true. On a non-empty table that missing row means the lease
-/// was already deleted after completion.
+/// A closed shard with no row is still claimed when it is listed and its children
+/// do not yet have real checkpoints, so a generation that was split before it was
+/// leased is not skipped. Once children have real checkpoints, a missing parent
+/// row is treated as already cleaned up and is not re-read.
 pub fn should_claim_shard(
     shard_closed: bool,
     has_checkpoint: bool,
     sequence: Option<&str>,
     parent_ids: &[String],
+    child_ids: &[String],
     sequences: &HashMap<String, String>,
     listed_shard_ids: &HashSet<String>,
-    checkpoint_table_empty: bool,
-    start_from_oldest: bool,
 ) -> bool {
     if sequence.map(is_shard_end).unwrap_or(false) {
         return false;
     }
-    if !parents_completed(
-        parent_ids,
-        sequences,
-        listed_shard_ids,
-        checkpoint_table_empty,
-        start_from_oldest,
-    ) {
+    if !parents_completed(parent_ids, sequences, listed_shard_ids) {
         return false;
     }
-    if shard_closed && !has_checkpoint && !(checkpoint_table_empty && start_from_oldest) {
+    if shard_closed && !has_checkpoint && children_have_real_checkpoints(child_ids, sequences) {
         return false;
     }
     true
@@ -307,52 +311,44 @@ mod tests {
     }
 
     #[test]
-    fn parents_completed_when_shard_end_or_cleaned_up() {
+    fn parents_completed_when_shard_end_or_unlisted() {
         let mut sequences = HashMap::new();
         sequences.insert("p1".into(), SHARD_END.into());
-        let listed = listed(&["p1", "p2"]);
-        assert!(parents_completed(
-            &["p1".into(), "p2".into()],
-            &sequences,
-            &listed,
-            false,
-            true
-        ));
-        sequences.insert("p2".into(), "4967".into());
+        let listed_p1_p2 = listed(&["p1", "p2"]);
         assert!(!parents_completed(
             &["p1".into(), "p2".into()],
             &sequences,
-            &listed,
-            false,
-            true
+            &listed_p1_p2,
         ));
-        assert!(parents_completed(&[], &sequences, &listed, false, true));
+        sequences.insert("p2".into(), SHARD_END.into());
+        assert!(parents_completed(
+            &["p1".into(), "p2".into()],
+            &sequences,
+            &listed_p1_p2,
+        ));
+        assert!(parents_completed(&[], &sequences, &listed_p1_p2));
+        sequences.remove("p2");
+        let listed_p1 = listed(&["p1"]);
+        assert!(parents_completed(
+            &["p1".into(), "p2".into()],
+            &sequences,
+            &listed_p1,
+        ));
     }
 
     #[test]
-    fn empty_table_blocks_children_of_listed_parents_when_starting_from_oldest() {
+    fn listed_parent_without_checkpoint_blocks_children() {
         let sequences = HashMap::new();
         let listed = listed(&["parent"]);
         assert!(!parents_completed(
             &["parent".into()],
             &sequences,
             &listed,
-            true,
-            true
         ));
         assert!(parents_completed(
             &["parent".into()],
             &sequences,
-            &listed,
-            true,
-            false
-        ));
-        assert!(parents_completed(
-            &["parent".into()],
-            &sequences,
-            &listed,
-            false,
-            true
+            &HashSet::new(),
         ));
     }
 
@@ -368,96 +364,80 @@ mod tests {
             true,
             Some(SHARD_END),
             &[],
+            &[],
             &sequences,
             &listed,
-            false,
-            true
         ));
         assert!(!should_claim_shard(
             false,
             false,
             None,
             &["parent".into()],
+            &[],
             &sequences,
             &listed,
-            false,
-            true
         ));
         assert!(should_claim_shard(
             false,
             false,
             None,
             &["done-parent".into()],
+            &[],
             &sequences,
             &listed,
-            false,
-            true
         ));
-        assert!(should_claim_shard(
+        assert!(!should_claim_shard(
             false,
             false,
             None,
             &["trimmed-parent".into()],
+            &[],
             &sequences,
             &listed,
-            false,
-            true
         ));
-        assert!(!should_claim_shard(
+        assert!(should_claim_shard(
             true,
             false,
             None,
             &[],
+            &[],
             &sequences,
             &listed,
-            false,
-            true
         ));
         assert!(should_claim_shard(
             true,
             true,
             Some(""),
             &[],
+            &[],
             &sequences,
             &listed,
-            false,
-            true
         ));
     }
 
     #[test]
-    fn empty_table_claims_closed_shards_only_when_starting_from_oldest() {
-        let sequences = HashMap::new();
-        let listed = listed(&["closed-parent"]);
+    fn claim_unleased_closed_shard_until_children_have_checkpoints() {
+        let mut sequences = HashMap::new();
+        let listed = listed(&["closed-parent", "child-a", "child-b"]);
         assert!(should_claim_shard(
             true,
             false,
             None,
             &[],
+            &["child-a".into(), "child-b".into()],
             &sequences,
             &listed,
-            true,
-            true
         ));
+        sequences.insert("child-a".into(), "1".into());
+        sequences.insert("child-b".into(), "2".into());
         assert!(!should_claim_shard(
             true,
             false,
             None,
             &[],
+            &["child-a".into(), "child-b".into()],
             &sequences,
             &listed,
-            true,
-            false
-        ));
-        assert!(!should_claim_shard(
-            true,
-            false,
-            None,
-            &[],
-            &sequences,
-            &listed,
-            false,
-            true
         ));
     }
 
