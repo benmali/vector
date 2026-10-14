@@ -132,7 +132,6 @@ pub struct AzureDataExplorerConfig {
     pub(super) ingestion_method: IngestionMethod,
 
     // ---- Table routing ----
-
     /// The target table. Supports [template syntax][template] for dynamic routing,
     /// e.g. `{{ kubernetes.namespace }}_logs` or a static `my_table`.
     ///
@@ -164,7 +163,6 @@ pub struct AzureDataExplorerConfig {
     pub(super) default_table: Option<String>,
 
     // ---- Auth ----
-
     /// Azure authentication configuration.
     ///
     /// Supports `client_secret_credential`, `managed_identity`, `workload_identity`,
@@ -172,7 +170,6 @@ pub struct AzureDataExplorerConfig {
     pub(super) auth: AzureAuthentication,
 
     // ---- Ingestion options ----
-
     /// Optional ingestion mapping reference name (`mappingName` query parameter for streaming,
     /// `jsonMappingReference` in the queued ingestion message).
     ///
@@ -191,7 +188,6 @@ pub struct AzureDataExplorerConfig {
     pub(super) ingestion_resources_refresh_interval_secs: u64,
 
     // ---- Batching, encoding, compression ----
-
     /// Batch configuration.
     ///
     /// For streaming ingestion the defaults are 500 events / 3.9 MB / 10 s.
@@ -410,8 +406,7 @@ impl ValidatedSink for AzureDataExplorerConfig {
                     partitioner,
                 );
 
-                let healthcheck =
-                    healthcheck_queued(self.ingestion_endpoint.clone(), auth).boxed();
+                let healthcheck = healthcheck_queued(self.ingestion_endpoint.clone(), auth).boxed();
                 (VectorSink::from_event_streamsink(sink), healthcheck)
             }
         };

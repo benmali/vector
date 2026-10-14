@@ -53,31 +53,61 @@ pub fn parents_completed(
     })
 }
 
-/// Children have progressed far enough that a missing closed-parent lease is a
-/// completed-and-cleaned row, not an unconsumed generation.
-fn children_have_real_checkpoints(
-    child_ids: &[String],
+/// Parent and closed-child links needed to tell a cleaned-up lease from a shard
+/// that was never read.
+pub struct ShardLineage<'a> {
+    pub children_by_parent: &'a HashMap<String, Vec<String>>,
+    pub closed_shard_ids: &'a HashSet<String>,
+}
+
+/// A shard's records are already accounted for when it has a real checkpoint, it
+/// is no longer listed, or it is a closed shard whose own child lineages are
+/// settled. An empty checkpoint is not progress. A missing row on an open shard
+/// is not settled: that shard may never have been leased.
+fn lineage_settled(
+    shard_id: &str,
+    lineage: &ShardLineage<'_>,
     sequences: &HashMap<String, String>,
+    listed_shard_ids: &HashSet<String>,
+    visiting: &mut HashSet<String>,
 ) -> bool {
-    !child_ids.is_empty()
-        && child_ids
+    if sequences.get(shard_id).is_some_and(|seq| !seq.is_empty()) {
+        return true;
+    }
+    if !listed_shard_ids.contains(shard_id) {
+        return true;
+    }
+    if !lineage.closed_shard_ids.contains(shard_id) {
+        return false;
+    }
+    if !visiting.insert(shard_id.to_string()) {
+        return false;
+    }
+    let settled = match lineage.children_by_parent.get(shard_id) {
+        Some(children) if !children.is_empty() => children
             .iter()
-            .all(|child| sequences.get(child).is_some_and(|seq| !seq.is_empty()))
+            .all(|child| lineage_settled(child, lineage, sequences, listed_shard_ids, visiting)),
+        _ => false,
+    };
+    visiting.remove(shard_id);
+    settled
 }
 
 /// Whether this shard may be leased this cycle (KCL 3.0 eligibility).
 ///
 /// Never claim `SHARD_END`. Never claim a child until its parents are completed.
-/// A closed shard with no row is still claimed when it is listed and its children
-/// do not yet have real checkpoints, so a generation that was split before it was
-/// leased is not skipped. Once children have real checkpoints, a missing parent
-/// row is treated as already cleaned up and is not re-read.
+/// A closed shard with no row is still claimed when it is listed and its child
+/// lineages are not settled, so a generation that was split before it was leased
+/// is not skipped. Once every child lineage is settled, a missing parent row was
+/// cleaned up after `SHARD_END` and must not be read again. A child whose own
+/// `SHARD_END` row was deleted still counts as settled when its descendants have
+/// real checkpoints.
 pub fn should_claim_shard(
-    shard_closed: bool,
+    shard_id: &str,
     has_checkpoint: bool,
     sequence: Option<&str>,
     parent_ids: &[String],
-    child_ids: &[String],
+    lineage: &ShardLineage<'_>,
     sequences: &HashMap<String, String>,
     listed_shard_ids: &HashSet<String>,
 ) -> bool {
@@ -87,8 +117,26 @@ pub fn should_claim_shard(
     if !parents_completed(parent_ids, sequences, listed_shard_ids) {
         return false;
     }
-    if shard_closed && !has_checkpoint && children_have_real_checkpoints(child_ids, sequences) {
-        return false;
+    let shard_closed = lineage.closed_shard_ids.contains(shard_id);
+    if shard_closed && !has_checkpoint {
+        let children = lineage
+            .children_by_parent
+            .get(shard_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        if !children.is_empty()
+            && children.iter().all(|child| {
+                lineage_settled(
+                    child,
+                    lineage,
+                    sequences,
+                    listed_shard_ids,
+                    &mut HashSet::new(),
+                )
+            })
+        {
+            return false;
+        }
     }
     true
 }
@@ -310,6 +358,16 @@ mod tests {
         ids.iter().map(|id| (*id).to_string()).collect()
     }
 
+    fn lineage<'a>(
+        children_by_parent: &'a HashMap<String, Vec<String>>,
+        closed_shard_ids: &'a HashSet<String>,
+    ) -> ShardLineage<'a> {
+        ShardLineage {
+            children_by_parent,
+            closed_shard_ids,
+        }
+    }
+
     #[test]
     fn parents_completed_when_shard_end_or_unlisted() {
         let mut sequences = HashMap::new();
@@ -340,11 +398,7 @@ mod tests {
     fn listed_parent_without_checkpoint_blocks_children() {
         let sequences = HashMap::new();
         let listed = listed(&["parent"]);
-        assert!(!parents_completed(
-            &["parent".into()],
-            &sequences,
-            &listed,
-        ));
+        assert!(!parents_completed(&["parent".into()], &sequences, &listed,));
         assert!(parents_completed(
             &["parent".into()],
             &sequences,
@@ -357,87 +411,137 @@ mod tests {
         let mut sequences = HashMap::new();
         sequences.insert("parent".into(), "4967".into());
         sequences.insert("done-parent".into(), SHARD_END.into());
-        let listed = listed(&["parent", "done-parent", "trimmed-parent", "closed"]);
+        let listed_ids = listed(&["parent", "done-parent", "trimmed-parent", "closed"]);
+        let children = HashMap::new();
+        let closed_ids = listed(&["closed"]);
+        let lineage = lineage(&children, &closed_ids);
 
         assert!(!should_claim_shard(
-            true,
+            "closed",
             true,
             Some(SHARD_END),
             &[],
-            &[],
+            &lineage,
             &sequences,
-            &listed,
+            &listed_ids,
         ));
         assert!(!should_claim_shard(
-            false,
+            "child",
             false,
             None,
             &["parent".into()],
-            &[],
+            &lineage,
             &sequences,
-            &listed,
+            &listed_ids,
         ));
         assert!(should_claim_shard(
-            false,
+            "child",
             false,
             None,
             &["done-parent".into()],
-            &[],
+            &lineage,
             &sequences,
-            &listed,
+            &listed_ids,
         ));
         assert!(!should_claim_shard(
-            false,
+            "child",
             false,
             None,
             &["trimmed-parent".into()],
-            &[],
+            &lineage,
             &sequences,
-            &listed,
+            &listed_ids,
         ));
         assert!(should_claim_shard(
-            true,
+            "closed",
             false,
             None,
             &[],
-            &[],
+            &lineage,
             &sequences,
-            &listed,
+            &listed_ids,
         ));
         assert!(should_claim_shard(
-            true,
+            "closed",
             true,
             Some(""),
             &[],
-            &[],
+            &lineage,
             &sequences,
-            &listed,
+            &listed_ids,
         ));
     }
 
     #[test]
     fn claim_unleased_closed_shard_until_children_have_checkpoints() {
         let mut sequences = HashMap::new();
-        let listed = listed(&["closed-parent", "child-a", "child-b"]);
+        let listed_ids = listed(&["closed-parent", "child-a", "child-b"]);
+        let children = children_by_parent(&[
+            ("child-a".into(), vec!["closed-parent".into()]),
+            ("child-b".into(), vec!["closed-parent".into()]),
+        ]);
+        let closed_ids = listed(&["closed-parent"]);
+        let lineage = lineage(&children, &closed_ids);
         assert!(should_claim_shard(
-            true,
+            "closed-parent",
             false,
             None,
             &[],
-            &["child-a".into(), "child-b".into()],
+            &lineage,
             &sequences,
-            &listed,
+            &listed_ids,
         ));
         sequences.insert("child-a".into(), "1".into());
         sequences.insert("child-b".into(), "2".into());
         assert!(!should_claim_shard(
-            true,
+            "closed-parent",
             false,
             None,
             &[],
-            &["child-a".into(), "child-b".into()],
+            &lineage,
             &sequences,
-            &listed,
+            &listed_ids,
+        ));
+    }
+
+    #[test]
+    fn do_not_reclaim_parent_after_intermediate_child_lease_is_deleted() {
+        // 000 was consumed and its SHARD_END row deleted. 001 was then split,
+        // consumed, and its SHARD_END row deleted too. 002 and the grandchildren
+        // still have real checkpoints, so 000 must not be read again.
+        let mut sequences = HashMap::new();
+        sequences.insert("002".into(), "20".into());
+        sequences.insert("003".into(), "30".into());
+        sequences.insert("004".into(), "40".into());
+        let listed_ids = listed(&["000", "001", "002", "003", "004"]);
+        let children = children_by_parent(&[
+            ("001".into(), vec!["000".into()]),
+            ("002".into(), vec!["000".into()]),
+            ("003".into(), vec!["001".into()]),
+            ("004".into(), vec!["001".into()]),
+        ]);
+        let closed_ids = listed(&["000", "001"]);
+        let lineage = lineage(&children, &closed_ids);
+        assert!(!should_claim_shard(
+            "000",
+            false,
+            None,
+            &[],
+            &lineage,
+            &sequences,
+            &listed_ids,
+        ));
+
+        // The same tree with no checkpoints anywhere is an unleased generation.
+        let sequences = HashMap::new();
+        assert!(should_claim_shard(
+            "000",
+            false,
+            None,
+            &[],
+            &lineage,
+            &sequences,
+            &listed_ids,
         ));
     }
 

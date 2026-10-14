@@ -27,6 +27,8 @@ mod aws_kinesis;
 mod aws_kinesis_firehose;
 #[cfg(any(feature = "sources-aws_s3", feature = "sources-aws_sqs",))]
 mod aws_sqs;
+#[cfg(feature = "sinks-azure_data_explorer")]
+mod azure_data_explorer;
 mod batch;
 mod common;
 mod conditions;
@@ -46,8 +48,6 @@ mod demo_logs;
 mod dnstap;
 #[cfg(feature = "sources-docker_logs")]
 mod docker_logs;
-#[cfg(feature = "sinks-azure_data_explorer")]
-mod azure_data_explorer;
 #[cfg(feature = "sinks-doris")]
 mod doris;
 mod encoding_transcode;
@@ -192,6 +192,8 @@ pub(crate) use self::aws_kinesis::*;
 pub(crate) use self::aws_kinesis_firehose::*;
 #[cfg(any(feature = "sources-aws_s3", feature = "sources-aws_sqs",))]
 pub(crate) use self::aws_sqs::*;
+#[cfg(feature = "sinks-azure_data_explorer")]
+pub(crate) use self::azure_data_explorer::*;
 #[cfg(feature = "sources-datadog_agent")]
 pub(crate) use self::datadog_agent::*;
 #[cfg(feature = "sinks-datadog_logs")]
@@ -208,8 +210,6 @@ pub(crate) use self::demo_logs::*;
 pub(crate) use self::dnstap::*;
 #[cfg(feature = "sources-docker_logs")]
 pub(crate) use self::docker_logs::*;
-#[cfg(feature = "sinks-azure_data_explorer")]
-pub(crate) use self::azure_data_explorer::*;
 #[cfg(feature = "sinks-doris")]
 pub(crate) use self::doris::*;
 #[cfg(feature = "sources-eventstoredb_metrics")]

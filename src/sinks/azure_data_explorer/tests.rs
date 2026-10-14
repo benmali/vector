@@ -171,7 +171,10 @@ fn config_streaming_is_default() {
     )
     .unwrap();
 
-    assert!(matches!(config.ingestion_method, IngestionMethod::Streaming));
+    assert!(matches!(
+        config.ingestion_method,
+        IngestionMethod::Streaming
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -265,8 +268,14 @@ fn encoder_with_transformer_field_filtering() {
         serde_json::from_str(&output).expect("valid JSON");
 
     assert_eq!(obj.get("message").and_then(|v| v.as_str()), Some("keep me"));
-    assert!(obj.get("host").is_none(), "filtered field 'host' should be absent");
-    assert!(obj.get("extra").is_none(), "filtered field 'extra' should be absent");
+    assert!(
+        obj.get("host").is_none(),
+        "filtered field 'host' should be absent"
+    );
+    assert!(
+        obj.get("extra").is_none(),
+        "filtered field 'extra' should be absent"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -326,10 +335,7 @@ fn partitioner_static_template_used_when_no_field() {
 fn partitioner_dynamic_template_resolves_from_event() {
     let p = make_partitioner(None, Some("{{ env }}_logs"), None);
     let event = make_log_event(&[("env", "production")]);
-    assert_eq!(
-        p.partition(&event),
-        Some("production_logs".to_string())
-    );
+    assert_eq!(p.partition(&event), Some("production_logs".to_string()));
 }
 
 #[test]

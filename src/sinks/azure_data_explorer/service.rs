@@ -446,9 +446,8 @@ async fn ingest_queued(
 
     // 7. Base64-encode and wrap in Azure Queue XML
     let message_b64 = base64::engine::general_purpose::STANDARD.encode(&ingestion_message);
-    let queue_payload = format!(
-        "<QueueMessage><MessageText>{message_b64}</MessageText></QueueMessage>"
-    );
+    let queue_payload =
+        format!("<QueueMessage><MessageText>{message_b64}</MessageText></QueueMessage>");
 
     // 8. Enqueue ingestion notification (round-robin)
     let queue_idx = queue_index.fetch_add(1, Ordering::Relaxed) % resources.queue_endpoints.len();
@@ -631,14 +630,7 @@ mod tests {
 
     #[test]
     fn ingestion_message_no_mapping() {
-        let msg = create_ingestion_message(
-            "db",
-            "tbl",
-            None,
-            "https://blob/path?sas",
-            42,
-            "tok",
-        );
+        let msg = create_ingestion_message("db", "tbl", None, "https://blob/path?sas", 42, "tok");
         let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
         assert_eq!(
             parsed["AdditionalProperties"]["jsonMappingReference"]

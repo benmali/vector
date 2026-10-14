@@ -129,11 +129,9 @@ where
         let batch_settings = self.batch_settings;
 
         input
-            .batched_partitioned(
-                self.partitioner,
-                batch_settings.timeout,
-                |_| batch_settings.as_item_size_config(HttpJsonBatchSizer),
-            )
+            .batched_partitioned(self.partitioner, batch_settings.timeout, |_| {
+                batch_settings.as_item_size_config(HttpJsonBatchSizer)
+            })
             // Drop batches whose partition key couldn't be resolved (table name is None).
             .filter_map(|(key, batch)| async move { key.map(move |k| (k, batch)) })
             .request_builder(
