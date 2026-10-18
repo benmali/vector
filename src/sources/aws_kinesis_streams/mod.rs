@@ -1,6 +1,10 @@
-pub mod checkpointer;
-pub mod source;
 pub mod batcher;
+pub mod checkpointer;
+pub mod closed_shard;
+pub mod source;
+
+#[cfg(test)]
+mod integration_tests;
 
 use vector_lib::{
     codecs::decoding::{DeserializerConfig, FramingConfig},
@@ -82,7 +86,6 @@ pub struct AwsKinesisStreamsConfig {
     #[serde(flatten)]
     pub region: RegionOrEndpoint,
 
-    #[configurable(derived)]
     #[serde(default)]
     pub auth: AwsAuthentication,
 
@@ -96,7 +99,9 @@ pub struct AwsKinesisStreamsConfig {
     /// source directly consumes those shards. When no shard suffix is given, shards
     /// are automatically balanced across all consumers using DynamoDB.
     #[configurable(metadata(docs::examples = "my-stream"))]
-    #[configurable(metadata(docs::examples = "arn:aws:kinesis:us-east-1:123456789012:stream/my-stream"))]
+    #[configurable(metadata(
+        docs::examples = "arn:aws:kinesis:us-east-1:123456789012:stream/my-stream"
+    ))]
     #[configurable(metadata(docs::examples = "my-stream:0"))]
     pub streams: Vec<String>,
 
@@ -151,21 +156,17 @@ pub struct AwsKinesisStreamsConfig {
     #[derivative(Default(value = "default_poll_interval_ms()"))]
     pub poll_interval_ms: u64,
 
-    #[configurable(derived)]
     #[serde(default = "default_framing_message_based")]
     #[derivative(Default(value = "default_framing_message_based()"))]
     pub framing: FramingConfig,
 
-    #[configurable(derived)]
     #[serde(default = "default_decoding")]
     #[derivative(Default(value = "default_decoding()"))]
     pub decoding: DeserializerConfig,
 
-    #[configurable(derived)]
     #[serde(default, deserialize_with = "bool_or_struct")]
     pub acknowledgements: SourceAcknowledgementsConfig,
 
-    #[configurable(derived)]
     pub tls: Option<TlsConfig>,
 
     /// Overrides the global log namespace setting for this source.

@@ -21,8 +21,7 @@ mod vrl;
 use ::bytes::Bytes;
 pub use avro::{AvroDeserializer, AvroDeserializerConfig, AvroDeserializerOptions};
 pub use cloudwatch_logs::{
-    CloudwatchLogsDeserializer, CloudwatchLogsDeserializerConfig,
-    CloudwatchLogsDeserializerOptions,
+    CloudwatchLogsDeserializer, CloudwatchLogsDeserializerConfig, CloudwatchLogsDeserializerOptions,
 };
 use dyn_clone::DynClone;
 pub use gelf::{GelfDeserializer, GelfDeserializerConfig, GelfDeserializerOptions};

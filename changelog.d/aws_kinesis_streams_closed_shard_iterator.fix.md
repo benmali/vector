@@ -1,0 +1,3 @@
+The `aws_kinesis_streams` source now follows KCL 3.0 closed-shard handling. A shard is finished only when `GetRecords` returns a null next iterator or `ChildShards`, then `SHARD_END` is written after in-flight records are delivered. On an empty checkpoint table with `start_from_oldest` enabled, closed parents are read before their children. After any lease exists, a deleted parent row is not created again, so a crash or rebalance resumes from the stored sequence. Leftover DynamoDB rows for shards no longer in ListShards are deleted. This prevents CloudWatch `GetRecords.IteratorAgeMilliseconds` from climbing for 24 hours and triggering KEDA mass-scale.
+
+authors: benmali

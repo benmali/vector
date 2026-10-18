@@ -27,11 +27,15 @@ mod aws_kinesis;
 mod aws_kinesis_firehose;
 #[cfg(any(feature = "sources-aws_s3", feature = "sources-aws_sqs",))]
 mod aws_sqs;
+#[cfg(feature = "sinks-azure_data_explorer")]
+mod azure_data_explorer;
 mod batch;
 mod common;
 mod conditions;
 #[cfg(feature = "sources-datadog_agent")]
 mod datadog_agent;
+#[cfg(feature = "sinks-datadog_logs")]
+mod datadog_logs;
 #[cfg(feature = "sinks-datadog_metrics")]
 mod datadog_metrics;
 #[cfg(feature = "sinks-datadog_traces")]
@@ -57,6 +61,10 @@ mod exec;
     feature = "sources-file",
     feature = "sources-kubernetes_logs",
     feature = "sinks-file",
+    feature = "sinks-aws_s3",
+    feature = "sinks-azure_blob",
+    feature = "sinks-gcp",
+    feature = "sinks-webhdfs",
 ))]
 mod file;
 #[cfg(any(feature = "sources-file_descriptor", feature = "sources-stdin"))]
@@ -113,8 +121,8 @@ mod parser;
 mod postgresql_metrics;
 mod process;
 #[cfg(any(
-    feature = "sources-prometheus-scrape",
-    feature = "sources-prometheus-remote-write",
+    feature = "sources-prometheus_scrape",
+    feature = "sources-prometheus_remote_write",
     feature = "sinks-prometheus"
 ))]
 mod prometheus;
@@ -146,7 +154,7 @@ mod udp;
 mod unix;
 #[cfg(any(feature = "sources-websocket", feature = "sinks-websocket"))]
 mod websocket;
-#[cfg(feature = "sinks-websocket-server")]
+#[cfg(feature = "sinks-websocket_server")]
 mod websocket_server;
 #[cfg(feature = "transforms-window")]
 mod window;
@@ -186,8 +194,12 @@ pub(crate) use self::aws_kinesis::*;
 pub(crate) use self::aws_kinesis_firehose::*;
 #[cfg(any(feature = "sources-aws_s3", feature = "sources-aws_sqs",))]
 pub(crate) use self::aws_sqs::*;
+#[cfg(feature = "sinks-azure_data_explorer")]
+pub(crate) use self::azure_data_explorer::*;
 #[cfg(feature = "sources-datadog_agent")]
 pub(crate) use self::datadog_agent::*;
+#[cfg(feature = "sinks-datadog_logs")]
+pub(crate) use self::datadog_logs::*;
 #[cfg(feature = "sinks-datadog_metrics")]
 pub(crate) use self::datadog_metrics::*;
 #[cfg(feature = "sinks-datadog_traces")]
@@ -263,8 +275,8 @@ pub(crate) use self::parser::*;
 #[cfg(feature = "sources-postgresql_metrics")]
 pub(crate) use self::postgresql_metrics::*;
 #[cfg(any(
-    feature = "sources-prometheus-scrape",
-    feature = "sources-prometheus-remote-write",
+    feature = "sources-prometheus_scrape",
+    feature = "sources-prometheus_remote_write",
     feature = "sinks-prometheus"
 ))]
 pub(crate) use self::prometheus::*;
@@ -292,7 +304,7 @@ pub(crate) use self::throttle::*;
 pub(crate) use self::unix::*;
 #[cfg(any(feature = "sources-websocket", feature = "sinks-websocket"))]
 pub(crate) use self::websocket::*;
-#[cfg(feature = "sinks-websocket-server")]
+#[cfg(feature = "sinks-websocket_server")]
 pub(crate) use self::websocket_server::*;
 #[cfg(feature = "transforms-window")]
 pub(crate) use self::window::*;

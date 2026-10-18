@@ -12,12 +12,14 @@
 //! each batch is built into an `HttpRequest<String>` (the `String` is the table
 //! name) by `AzureDataExplorerRequestBuilder`.
 
+use vector_lib::lookup::PathPrefix;
+
 use crate::{
     sinks::{
         prelude::*,
         util::http::{HttpJsonBatchSizer, HttpRequest},
     },
-    template::Template,
+    template::ConfinedTemplate,
 };
 
 use super::request_builder::AzureDataExplorerRequestBuilder;
@@ -31,7 +33,7 @@ pub(super) struct AdxPartitioner {
     /// If set, look up this event field for the table name (highest priority).
     pub table_field: Option<String>,
     /// Template to render for the table name.
-    pub table: Option<Template>,
+    pub table: Option<ConfinedTemplate>,
     /// Static fallback when neither `table_field` nor `table` yields a value.
     pub default_table: Option<String>,
 }
@@ -45,12 +47,14 @@ impl Partitioner for AdxPartitioner {
         // 1. Try table_field first (only applicable to log events).
         if let Some(ref field) = self.table_field {
             if let Event::Log(log) = item {
-                if let Some(table) = log
-                    .get(field.as_str())
-                    .and_then(|v| v.as_str().map(|s| s.to_string()))
-                    .filter(|s| !s.is_empty())
-                {
-                    return Some(table);
+                if let Ok(path) = vrl::path::parse_value_path(field) {
+                    if let Some(table) = log
+                        .get((PathPrefix::Event, &path))
+                        .and_then(|v| v.as_str().map(|s| s.to_string()))
+                        .filter(|s| !s.is_empty())
+                    {
+                        return Some(table);
+                    }
                 }
             }
         }
@@ -125,11 +129,9 @@ where
         let batch_settings = self.batch_settings;
 
         input
-            .batched_partitioned(
-                self.partitioner,
-                batch_settings.timeout,
-                |_| batch_settings.as_item_size_config(HttpJsonBatchSizer),
-            )
+            .batched_partitioned(self.partitioner, batch_settings.timeout, |_| {
+                batch_settings.as_item_size_config(HttpJsonBatchSizer)
+            })
             // Drop batches whose partition key couldn't be resolved (table name is None).
             .filter_map(|(key, batch)| async move { key.map(move |k| (k, batch)) })
             .request_builder(
@@ -174,11 +176,23 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::template::{ConfinementConfig, Template};
+
+    fn confine_table(raw: &str) -> ConfinedTemplate {
+        let template: Template = raw.try_into().expect("valid template");
+        let confinement = ConfinementConfig {
+            dangerously_allow_unconfined_template_resolution: true,
+        };
+        template
+            .confine(&confinement, "azure_data_explorer", "table")
+            .expect("table template")
+    }
 
     fn make_log_event(fields: &[(&str, &str)]) -> Event {
         let mut log = LogEvent::default();
         for (k, v) in fields {
-            log.insert(*k, *v);
+            let field_path = vrl::path::parse_value_path(k).expect("event field path");
+            log.insert((PathPrefix::Event, &field_path), *v);
         }
         Event::Log(log)
     }
@@ -190,7 +204,7 @@ mod tests {
     ) -> AdxPartitioner {
         AdxPartitioner {
             table_field: table_field.map(String::from),
-            table: table.map(|s| s.try_into().expect("valid template")),
+            table: table.map(confine_table),
             default_table: default_table.map(String::from),
         }
     }

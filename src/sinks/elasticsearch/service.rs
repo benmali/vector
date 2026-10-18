@@ -131,7 +131,7 @@ impl HttpRequestBuilder {
         }
 
         for (header, value) in &self.http_request_config.headers {
-            builder = builder.header(&header[..], &value[..]);
+            builder = builder.header(header.as_str(), value.as_str());
         }
 
         let mut request = builder
@@ -249,10 +249,7 @@ fn log_failed_events(response: &Response<Bytes>, original_events: &[ProcessedEve
             .get("reason")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
-        let es_status = result
-            .get("status")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
+        let es_status = result.get("status").and_then(|v| v.as_u64()).unwrap_or(0);
 
         if let Some(event) = original_events.get(i) {
             debug!(

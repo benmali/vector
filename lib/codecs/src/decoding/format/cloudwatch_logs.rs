@@ -70,7 +70,11 @@ impl CloudwatchLogsDeserializerConfig {
             Kind::array(Collection::from_unknown(Kind::bytes())),
             None,
         )
-        .optional_field(&owned_value_path!("timestamp"), Kind::timestamp(), Some("timestamp"))
+        .optional_field(
+            &owned_value_path!("timestamp"),
+            Kind::timestamp(),
+            Some("timestamp"),
+        )
     }
 }
 
@@ -277,7 +281,11 @@ mod tests {
             let events = deserializer
                 .parse(Bytes::from(compressed.clone()), namespace)
                 .unwrap();
-            assert_eq!(events.len(), 2, "expected 2 events for namespace {namespace:?}");
+            assert_eq!(
+                events.len(),
+                2,
+                "expected 2 events for namespace {namespace:?}"
+            );
         }
     }
 
@@ -307,8 +315,14 @@ mod tests {
 
         let log = events[0].as_log();
         assert_eq!(log["owner"], Value::Bytes("123456789012".into()));
-        assert_eq!(log["logGroup"], Value::Bytes("/aws/lambda/my-function".into()));
-        assert_eq!(log["logStream"], Value::Bytes("2024/01/01/[$LATEST]abc123".into()));
+        assert_eq!(
+            log["logGroup"],
+            Value::Bytes("/aws/lambda/my-function".into())
+        );
+        assert_eq!(
+            log["logStream"],
+            Value::Bytes("2024/01/01/[$LATEST]abc123".into())
+        );
         assert_eq!(log["messageType"], Value::Bytes("DATA_MESSAGE".into()));
     }
 
@@ -361,7 +375,10 @@ mod tests {
 
         let log = events[0].as_log();
         let ts = log.get(event_path!("timestamp"));
-        assert!(ts.is_some(), "expected timestamp event field for Vector namespace");
+        assert!(
+            ts.is_some(),
+            "expected timestamp event field for Vector namespace"
+        );
         assert!(matches!(ts.unwrap(), Value::Timestamp(_)));
     }
 

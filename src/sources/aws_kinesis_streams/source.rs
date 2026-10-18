@@ -3,8 +3,11 @@
 //! Implements shard discovery, balanced/explicit shard assignment, per-shard polling
 //! loops, and at-least-once delivery via DynamoDB checkpointing.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
 use aws_sdk_dynamodb::Client as DynamoDbClient;
@@ -13,6 +16,7 @@ use aws_sdk_kinesis::{
     error::DisplayErrorContext,
     types::{Record, Shard, ShardIteratorType},
 };
+use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use tokio::select;
 use tokio::task::JoinSet;
@@ -22,14 +26,15 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use uuid::Uuid;
 use vector_lib::{
+    EstimatedJsonEncodedSizeOf,
     codecs::StreamDecodingError,
     config::LogNamespace,
     internal_event::{CountByteSize, EventsReceived, InternalEventHandle as _},
-    lookup::{metadata_path, PathPrefix},
-    EstimatedJsonEncodedSizeOf,
+    lookup::{PathPrefix, metadata_path, owned_value_path, path},
 };
 
 use crate::{
+    SourceSender,
     codecs::Decoder,
     config::log_schema,
     event::{BatchNotifier, BatchStatus, Event},
@@ -37,9 +42,14 @@ use crate::{
     sources::aws_kinesis_streams::{
         AwsKinesisStreamsConfig,
         batcher::SequenceTracker,
-        checkpointer::{CheckpointerError, KinesisCheckpointer},
+        checkpointer::{CheckpointData, CheckpointerError, ClientClaim, KinesisCheckpointer},
+        closed_shard::{
+            IteratorErrorAction, SHARD_END, ShardIteratorChoice, ShardLineage, children_by_parent,
+            is_child_shard, is_shard_closed, is_shard_end, iterator_error_action,
+            leftover_checkpoint_shard_ids, parent_ids, shard_iterator_choice, should_claim_shard,
+            should_delete_shard_end_lease, should_finish_shard_consumer,
+        },
     },
-    SourceSender,
 };
 
 const KINESIS_MAX_RECORDS: i32 = 10_000;
@@ -54,6 +64,45 @@ const SHARD_READ_BUDGET_BYTES_PER_SEC: u64 = 2 * 1024 * 1024;
 // Backoff for ProvisionedThroughputExceededException: start at 1s (AWS recommendation), cap at 10s.
 const THROTTLE_BACKOFF_INITIAL_MS: u64 = 1_000;
 const THROTTLE_BACKOFF_MAX_MS: u64 = 10_000;
+
+/// One ListShards plus checkpoint snapshot for an explicit-mode stream.
+struct ExplicitStreamView {
+    shards: Vec<Shard>,
+    checkpoints: CheckpointData,
+}
+
+enum ExplicitLeaseAction {
+    ClaimNew,
+    Steal(String),
+    Wait,
+    AlreadyOwned,
+}
+
+/// Decide how an explicit consumer should take a shard that may still have a lease.
+fn explicit_lease_action(
+    claims: &HashMap<String, Vec<ClientClaim>>,
+    shard_id: &str,
+    self_id: &str,
+    lease_period: Duration,
+) -> ExplicitLeaseAction {
+    for (client_id, owned) in claims {
+        let Some(claim) = owned.iter().find(|claim| claim.shard_id == shard_id) else {
+            continue;
+        };
+        let elapsed = Utc::now()
+            .signed_duration_since(claim.lease_timeout)
+            .to_std()
+            .unwrap_or(Duration::ZERO);
+        if elapsed > lease_period * 2 {
+            return ExplicitLeaseAction::Steal(client_id.clone());
+        }
+        if client_id == self_id {
+            return ExplicitLeaseAction::AlreadyOwned;
+        }
+        return ExplicitLeaseAction::Wait;
+    }
+    ExplicitLeaseAction::ClaimNew
+}
 
 /// Parsed stream entry from the config `streams` field.
 #[derive(Debug, Clone)]
@@ -278,13 +327,16 @@ impl KinesisStreamsSource {
         shard_id: &str,
         sequence: &str,
         start_from_oldest: bool,
-    ) -> crate::Result<String> {
-        let (iter_type, has_seq) = if !sequence.is_empty() {
-            (ShardIteratorType::AfterSequenceNumber, true)
-        } else if start_from_oldest {
-            (ShardIteratorType::TrimHorizon, false)
-        } else {
-            (ShardIteratorType::Latest, false)
+        shard_closed: bool,
+        is_child: bool,
+    ) -> Result<String, ShardIteratorError> {
+        let choice = shard_iterator_choice(sequence, start_from_oldest, shard_closed, is_child);
+        let (iter_type, has_seq) = match choice {
+            ShardIteratorChoice::AfterSequenceNumber => {
+                (ShardIteratorType::AfterSequenceNumber, true)
+            }
+            ShardIteratorChoice::TrimHorizon => (ShardIteratorType::TrimHorizon, false),
+            ShardIteratorChoice::Latest => (ShardIteratorType::Latest, false),
         };
 
         let mut req = self
@@ -298,15 +350,25 @@ impl KinesisStreamsSource {
             req = req.starting_sequence_number(sequence);
         }
 
-        let result = req
-            .send()
-            .await
-            .map_err(|e| format!("GetShardIterator error: {}", DisplayErrorContext(&e)))?;
+        let result = match req.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                let not_found = e
+                    .as_service_error()
+                    .map(|se| se.is_resource_not_found_exception())
+                    .unwrap_or(false);
+                return Err(ShardIteratorError::new(
+                    not_found,
+                    false,
+                    DisplayErrorContext(&e),
+                ));
+            }
+        };
 
         match result.shard_iterator {
             Some(iter) if !iter.is_empty() => Ok(iter),
             _ => {
-                let fallback = self
+                let fallback = match self
                     .kinesis
                     .get_shard_iterator()
                     .stream_arn(arn)
@@ -314,17 +376,27 @@ impl KinesisStreamsSource {
                     .shard_iterator_type(ShardIteratorType::TrimHorizon)
                     .send()
                     .await
-                    .map_err(|e| {
-                        format!(
-                            "GetShardIterator fallback error: {}",
-                            DisplayErrorContext(&e)
-                        )
-                    })?;
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let not_found = e
+                            .as_service_error()
+                            .map(|se| se.is_resource_not_found_exception())
+                            .unwrap_or(false);
+                        return Err(ShardIteratorError::new(
+                            not_found,
+                            true,
+                            DisplayErrorContext(&e),
+                        ));
+                    }
+                };
 
                 fallback
                     .shard_iterator
                     .filter(|s| !s.is_empty())
-                    .ok_or_else(|| "Failed to obtain shard iterator".into())
+                    .ok_or_else(|| {
+                        ShardIteratorError::Other("Failed to obtain shard iterator".into())
+                    })
             }
         }
     }
@@ -357,32 +429,130 @@ impl KinesisStreamsSource {
                     }
                 };
 
-                let checkpoint_data =
-                    match checkpointer.get_checkpoints_and_claims(&stream.id).await {
-                        Ok(d) => d,
-                        Err(e) => {
-                            if cancel.is_cancelled() {
-                                break 'outer;
-                            }
-                            error!(message = "Failed to fetch checkpoints.", stream = %stream.id, error = %e);
-                            continue;
+                let checkpoint_data = match checkpointer
+                    .get_checkpoints_and_claims(&stream.id)
+                    .await
+                {
+                    Ok(d) => d,
+                    Err(e) => {
+                        if cancel.is_cancelled() {
+                            break 'outer;
                         }
-                    };
+                        error!(message = "Failed to fetch checkpoints.", stream = %stream.id, error = %e);
+                        continue;
+                    }
+                };
 
-                // Build unclaimed shard map.
+                // KCL 3.0 lease eligibility: never claim SHARD_END; never claim a
+                // child until its parents are completed. A still-listed closed
+                // shard with no row is claimed so a generation split before it was
+                // leased is not skipped. A missing row whose child lineages are
+                // already settled was cleaned up after SHARD_END and is not read
+                // again.
                 let mut unclaimed: HashMap<String, String> = HashMap::new();
+                let mut closed_by_id: HashMap<String, bool> = HashMap::new();
+                let mut parent_ids_by_shard: HashMap<String, Vec<String>> = HashMap::new();
+                let mut shard_parent_pairs: Vec<(String, Vec<String>)> = Vec::new();
+                let mut listed_ids: HashSet<String> = HashSet::new();
                 for shard in &all_shards {
                     let shard_id = shard.shard_id().to_string();
-                    let is_finished = shard
-                        .sequence_number_range()
-                        .and_then(|r| r.ending_sequence_number())
-                        .map(|e| e != "null")
-                        .unwrap_or(false);
-
-                    if !is_finished
-                        || checkpoint_data.shards_with_checkpoints.contains_key(&shard_id)
-                    {
+                    let closed = is_shard_closed(
+                        shard
+                            .sequence_number_range()
+                            .and_then(|r| r.ending_sequence_number()),
+                    );
+                    let parents =
+                        parent_ids(shard.parent_shard_id(), shard.adjacent_parent_shard_id());
+                    closed_by_id.insert(shard_id.clone(), closed);
+                    parent_ids_by_shard.insert(shard_id.clone(), parents.clone());
+                    shard_parent_pairs.push((shard_id.clone(), parents));
+                    listed_ids.insert(shard_id);
+                }
+                let children_map = children_by_parent(&shard_parent_pairs);
+                let closed_ids: HashSet<String> = closed_by_id
+                    .iter()
+                    .filter(|(_, closed)| **closed)
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                let lineage = ShardLineage {
+                    children_by_parent: &children_map,
+                    closed_shard_ids: &closed_ids,
+                };
+                for shard_id in listed_ids.clone() {
+                    let parents = parent_ids_by_shard
+                        .get(&shard_id)
+                        .cloned()
+                        .unwrap_or_default();
+                    let sequence = checkpoint_data.sequence_numbers.get(&shard_id);
+                    if should_claim_shard(
+                        &shard_id,
+                        checkpoint_data
+                            .shards_with_checkpoints
+                            .contains_key(&shard_id),
+                        sequence.map(String::as_str),
+                        &parents,
+                        &lineage,
+                        &checkpoint_data.sequence_numbers,
+                        &listed_ids,
+                    ) {
                         unclaimed.insert(shard_id, String::new());
+                    }
+                }
+
+                // Delete leftover rows for shards ListShards no longer returns
+                // (retention expired) and SHARD_END parents whose children have
+                // started. Skip rows with an unexpired lease so an in-flight
+                // consumer is not deleted out from under itself.
+                let actively_leased: HashSet<String> = checkpoint_data
+                    .client_claims
+                    .values()
+                    .flatten()
+                    .filter(|claim| {
+                        Utc::now()
+                            .signed_duration_since(claim.lease_timeout)
+                            .to_std()
+                            .unwrap_or(Duration::ZERO)
+                            <= lease_period * 2
+                    })
+                    .map(|claim| claim.shard_id.clone())
+                    .collect();
+
+                for shard_id in leftover_checkpoint_shard_ids(
+                    checkpoint_data.sequence_numbers.keys().cloned(),
+                    &listed_ids,
+                ) {
+                    if actively_leased.contains(&shard_id) {
+                        continue;
+                    }
+                    warn!(
+                        message = "Deleting leftover checkpoint for shard no longer in ListShards.",
+                        stream = %stream.id,
+                        shard = %shard_id,
+                    );
+                    let _ = checkpointer.delete(&stream.id, &shard_id).await;
+                }
+
+                for (shard_id, sequence) in &checkpoint_data.sequence_numbers {
+                    if !listed_ids.contains(shard_id) || actively_leased.contains(shard_id) {
+                        continue;
+                    }
+                    let children = children_map.get(shard_id).cloned().unwrap_or_default();
+                    let parents = parent_ids_by_shard
+                        .get(shard_id)
+                        .cloned()
+                        .unwrap_or_default();
+                    if should_delete_shard_end_lease(
+                        sequence,
+                        &children,
+                        &parents,
+                        &checkpoint_data.sequence_numbers,
+                    ) {
+                        debug!(
+                            message = "Deleting SHARD_END parent lease after children started.",
+                            stream = %stream.id,
+                            shard = %shard_id,
+                        );
+                        let _ = checkpointer.delete(&stream.id, &shard_id).await;
                     }
                 }
 
@@ -393,7 +563,22 @@ impl KinesisStreamsSource {
                             .to_std()
                             .unwrap_or(Duration::ZERO);
 
-                        if elapsed > lease_period * 2 {
+                        let parents = parent_ids_by_shard
+                            .get(&claim.shard_id)
+                            .cloned()
+                            .unwrap_or_default();
+                        let sequence = checkpoint_data.sequence_numbers.get(&claim.shard_id);
+                        let eligible = should_claim_shard(
+                            &claim.shard_id,
+                            true,
+                            sequence.map(String::as_str),
+                            &parents,
+                            &lineage,
+                            &checkpoint_data.sequence_numbers,
+                            &listed_ids,
+                        );
+
+                        if elapsed > lease_period * 2 && eligible {
                             unclaimed.insert(claim.shard_id.clone(), client_id.clone());
                         } else {
                             unclaimed.remove(&claim.shard_id);
@@ -405,16 +590,37 @@ impl KinesisStreamsSource {
                     for (shard_id, from_client) in &unclaimed {
                         match checkpointer.claim(&stream.id, shard_id, from_client).await {
                             Ok(seq) => {
+                                if is_shard_end(&seq) {
+                                    let _ = checkpointer
+                                        .checkpoint(&stream.id, shard_id, SHARD_END, true)
+                                        .await;
+                                    continue;
+                                }
                                 let src = Arc::clone(&self);
                                 let chk = Arc::clone(&checkpointer);
                                 let out2 = out.clone();
                                 let cancel2 = cancel.clone();
                                 let stream2 = stream.clone();
                                 let shard_id2 = shard_id.clone();
+                                let shard_closed =
+                                    closed_by_id.get(shard_id).copied().unwrap_or(false);
+                                let is_child = is_child_shard(
+                                    parent_ids_by_shard
+                                        .get(shard_id)
+                                        .map(Vec::as_slice)
+                                        .unwrap_or(&[]),
+                                );
                                 task_set.spawn(
                                     async move {
                                         src.run_shard_consumer(
-                                            stream2, shard_id2, seq, chk, out2, cancel2,
+                                            stream2,
+                                            shard_id2,
+                                            seq,
+                                            chk,
+                                            out2,
+                                            cancel2,
+                                            shard_closed,
+                                            is_child,
                                         )
                                         .await;
                                     }
@@ -445,21 +651,61 @@ impl KinesisStreamsSource {
                         if claims.len() > self_claims + 1 {
                             let idx = simple_rand() % claims.len();
                             let to_steal = &claims[idx];
+                            let parents = parent_ids_by_shard
+                                .get(&to_steal.shard_id)
+                                .cloned()
+                                .unwrap_or_default();
+                            let sequence = checkpoint_data.sequence_numbers.get(&to_steal.shard_id);
+                            let closed = closed_by_id
+                                .get(&to_steal.shard_id)
+                                .copied()
+                                .unwrap_or(false);
+                            if !should_claim_shard(
+                                &to_steal.shard_id,
+                                true,
+                                sequence.map(String::as_str),
+                                &parents,
+                                &lineage,
+                                &checkpoint_data.sequence_numbers,
+                                &listed_ids,
+                            ) {
+                                continue;
+                            }
                             match checkpointer
                                 .claim(&stream.id, &to_steal.shard_id, client_id)
                                 .await
                             {
                                 Ok(seq) => {
+                                    if is_shard_end(&seq) {
+                                        let _ = checkpointer
+                                            .checkpoint(
+                                                &stream.id,
+                                                &to_steal.shard_id,
+                                                SHARD_END,
+                                                true,
+                                            )
+                                            .await;
+                                        break 'steal;
+                                    }
                                     let src = Arc::clone(&self);
                                     let chk = Arc::clone(&checkpointer);
                                     let out2 = out.clone();
                                     let cancel2 = cancel.clone();
                                     let stream2 = stream.clone();
                                     let shard_id2 = to_steal.shard_id.clone();
+                                    let shard_closed = closed;
+                                    let is_child = is_child_shard(&parents);
                                     task_set.spawn(
                                         async move {
                                             src.run_shard_consumer(
-                                                stream2, shard_id2, seq, chk, out2, cancel2,
+                                                stream2,
+                                                shard_id2,
+                                                seq,
+                                                chk,
+                                                out2,
+                                                cancel2,
+                                                shard_closed,
+                                                is_child,
                                             )
                                             .await;
                                         }
@@ -510,6 +756,7 @@ impl KinesisStreamsSource {
         out: SourceSender,
         cancel: CancellationToken,
     ) {
+        let lease_period = Duration::from_secs(self.config.lease_period_secs);
         let mut task_set: JoinSet<()> = JoinSet::new();
         let mut pending: Vec<(StreamEntry, String)> = Vec::new();
 
@@ -520,18 +767,162 @@ impl KinesisStreamsSource {
         }
 
         while !pending.is_empty() && !cancel.is_cancelled() {
+            let mut needed: HashMap<String, StreamEntry> = HashMap::new();
+            for (stream, _) in &pending {
+                needed.insert(stream.id.clone(), stream.clone());
+            }
+
+            let mut loaded: HashMap<String, Result<ExplicitStreamView, String>> = HashMap::new();
+            for (id, stream) in &needed {
+                let listed = self.collect_shards(&stream.arn).await;
+                let checkpoints = checkpointer.get_checkpoints_and_claims(id).await;
+                let view = match (listed, checkpoints) {
+                    (Ok(shards), Ok(checkpoints)) => Ok(ExplicitStreamView {
+                        shards,
+                        checkpoints,
+                    }),
+                    (Err(e), _) => Err(e.to_string()),
+                    (_, Err(e)) => Err(e.to_string()),
+                };
+                loaded.insert(id.clone(), view);
+            }
+
             let mut still_pending = Vec::new();
             for (stream, shard_id) in pending.drain(..) {
-                match checkpointer.claim(&stream.id, &shard_id, "").await {
+                let Some(view) = loaded.get(&stream.id) else {
+                    still_pending.push((stream, shard_id));
+                    continue;
+                };
+                let view = match view {
+                    Ok(view) => view,
+                    Err(e) => {
+                        if cancel.is_cancelled() {
+                            break;
+                        }
+                        error!(
+                            message = "Failed to load explicit shard metadata, will retry.",
+                            shard = %shard_id,
+                            error = %e
+                        );
+                        still_pending.push((stream, shard_id));
+                        continue;
+                    }
+                };
+
+                let Some(shard) = view
+                    .shards
+                    .iter()
+                    .find(|shard| shard.shard_id() == shard_id)
+                else {
+                    warn!(
+                        message = "Explicit shard is not in ListShards, will retry.",
+                        shard = %shard_id
+                    );
+                    still_pending.push((stream, shard_id));
+                    continue;
+                };
+
+                let closed = is_shard_closed(
+                    shard
+                        .sequence_number_range()
+                        .and_then(|range| range.ending_sequence_number()),
+                );
+                let parents = parent_ids(shard.parent_shard_id(), shard.adjacent_parent_shard_id());
+                let explicit_ids: HashSet<String> =
+                    stream.explicit_shards.iter().cloned().collect();
+                // Only parents the user also listed can block this shard. A child-only
+                // explicit config must not wait for a parent nobody is consuming.
+                let blocking_parents: Vec<String> = parents
+                    .iter()
+                    .filter(|parent| explicit_ids.contains(*parent))
+                    .cloned()
+                    .collect();
+                let listed_ids: HashSet<String> = view
+                    .shards
+                    .iter()
+                    .map(|shard| shard.shard_id().to_string())
+                    .collect();
+                let sequence = view.checkpoints.sequence_numbers.get(&shard_id);
+                let has_checkpoint = view
+                    .checkpoints
+                    .shards_with_checkpoints
+                    .contains_key(&shard_id);
+                let shard_parent_pairs: Vec<(String, Vec<String>)> = view
+                    .shards
+                    .iter()
+                    .map(|candidate| {
+                        (
+                            candidate.shard_id().to_string(),
+                            parent_ids(
+                                candidate.parent_shard_id(),
+                                candidate.adjacent_parent_shard_id(),
+                            ),
+                        )
+                    })
+                    .collect();
+                let children_map = children_by_parent(&shard_parent_pairs);
+                let closed_ids: HashSet<String> = view
+                    .shards
+                    .iter()
+                    .filter(|candidate| {
+                        is_shard_closed(
+                            candidate
+                                .sequence_number_range()
+                                .and_then(|range| range.ending_sequence_number()),
+                        )
+                    })
+                    .map(|candidate| candidate.shard_id().to_string())
+                    .collect();
+                let lineage = ShardLineage {
+                    children_by_parent: &children_map,
+                    closed_shard_ids: &closed_ids,
+                };
+
+                if !should_claim_shard(
+                    &shard_id,
+                    has_checkpoint,
+                    sequence.map(String::as_str),
+                    &blocking_parents,
+                    &lineage,
+                    &view.checkpoints.sequence_numbers,
+                    &listed_ids,
+                ) {
+                    still_pending.push((stream, shard_id));
+                    continue;
+                }
+
+                let action = explicit_lease_action(
+                    &view.checkpoints.client_claims,
+                    &shard_id,
+                    &self.client_id,
+                    lease_period,
+                );
+                let from_client = match action {
+                    ExplicitLeaseAction::AlreadyOwned => continue,
+                    ExplicitLeaseAction::Wait => {
+                        still_pending.push((stream, shard_id));
+                        continue;
+                    }
+                    ExplicitLeaseAction::ClaimNew => String::new(),
+                    ExplicitLeaseAction::Steal(owner) => owner,
+                };
+
+                match checkpointer
+                    .claim(&stream.id, &shard_id, &from_client)
+                    .await
+                {
                     Ok(seq) => {
                         let src = Arc::clone(&self);
                         let chk = Arc::clone(&checkpointer);
                         let out2 = out.clone();
                         let cancel2 = cancel.clone();
+                        let is_child = is_child_shard(&parents);
                         task_set.spawn(
                             async move {
-                                src.run_shard_consumer(stream, shard_id, seq, chk, out2, cancel2)
-                                    .await;
+                                src.run_shard_consumer(
+                                    stream, shard_id, seq, chk, out2, cancel2, closed, is_child,
+                                )
+                                .await;
                             }
                             .in_current_span(),
                         );
@@ -570,11 +961,15 @@ impl KinesisStreamsSource {
         checkpointer: Arc<KinesisCheckpointer>,
         mut out: SourceSender,
         cancel: CancellationToken,
+        mut shard_closed: bool,
+        is_child: bool,
     ) {
         debug!(
             message = "Starting shard consumer.",
             stream = %stream.id,
             shard = %shard_id,
+            shard_closed,
+            is_child,
             client_id = %self.client_id,
         );
 
@@ -603,24 +998,58 @@ impl KinesisStreamsSource {
 
         let events_received = register!(EventsReceived);
 
+        if is_shard_end(&starting_sequence) {
+            debug!(
+                message = "Shard already at SHARD_END; releasing lease without polling.",
+                shard = %shard_id,
+            );
+            let _ = checkpointer
+                .checkpoint(&stream.id, &shard_id, SHARD_END, true)
+                .await;
+            return;
+        }
+
         let mut iter = match self
             .get_shard_iterator(
                 &stream.arn,
                 &shard_id,
                 &starting_sequence,
                 self.config.start_from_oldest,
+                shard_closed,
+                is_child,
             )
             .await
         {
             Ok(it) => it,
             Err(e) => {
                 error!(message = "Failed to get shard iterator.", shard = %shard_id, error = %e);
-                let _ = checkpointer
-                    .checkpoint(&stream.id, &shard_id, &starting_sequence, true)
-                    .await;
+                match iterator_error_action(e.is_resource_not_found()) {
+                    IteratorErrorAction::Delete => {
+                        warn!(
+                            message = "Deleting checkpoint after GetShardIterator failure on missing shard.",
+                            shard = %shard_id,
+                        );
+                        let _ = checkpointer.delete(&stream.id, &shard_id).await;
+                    }
+                    IteratorErrorAction::Release => {
+                        let _ = checkpointer
+                            .checkpoint(&stream.id, &shard_id, &starting_sequence, true)
+                            .await;
+                    }
+                }
                 return;
             }
         };
+
+        let lost_lease = Arc::new(AtomicBool::new(false));
+        let heartbeat = LeaseHeartbeat::spawn(
+            Arc::clone(&checkpointer),
+            Arc::clone(&lost_lease),
+            cancel.clone(),
+            stream.id.clone(),
+            shard_id.clone(),
+            Duration::from_secs(self.config.lease_period_secs),
+        );
 
         let mut backoff_ms = poll_floor_ms;
         let mut throttle_backoff_ms = THROTTLE_BACKOFF_INITIAL_MS;
@@ -630,10 +1059,16 @@ impl KinesisStreamsSource {
         // (clamped to [200, 1000] ms) to respect the configured polling interval.
         let mut next_call_delay = Duration::from_millis(poll_floor_ms);
         let mut shard_finished = false;
+        let mut shard_gone = false;
         let mut still_owned = true;
 
         loop {
-            if cancel.is_cancelled() {
+            if cancel.is_cancelled() || lost_lease.load(Ordering::Acquire) {
+                if lost_lease.load(Ordering::Acquire) {
+                    still_owned = false;
+                    let seq = tracker.acked_sequence();
+                    let _ = checkpointer.yield_shard(&stream.id, &shard_id, &seq).await;
+                }
                 break;
             }
 
@@ -648,9 +1083,7 @@ impl KinesisStreamsSource {
                         still_owned = owned;
                         if !still_owned {
                             debug!(message = "Shard ownership lost; yielding.", shard = %shard_id);
-                            let _ = checkpointer
-                                .yield_shard(&stream.id, &shard_id, &seq)
-                                .await;
+                            let _ = checkpointer.yield_shard(&stream.id, &shard_id, &seq).await;
                             break;
                         }
                     }
@@ -661,16 +1094,20 @@ impl KinesisStreamsSource {
                 last_commit = tokio::time::Instant::now();
             }
 
-            // Back-pressure: wait until there is room for a full batch before
-            // issuing the next GetRecords call.  Checking for max_records_per_call
-            // rather than 1 prevents the in-flight count from significantly
-            // exceeding checkpoint_limit when large batches are returned.
-            if !tracker.can_accept(self.config.max_records_per_call as i64) {
+            // Back-pressure: request only as many records as the checkpoint cap
+            // still has room for. Requiring a full `max_records_per_call` stalls
+            // the consumer when `checkpoint_limit` is smaller than that maximum.
+            let remaining = tracker.remaining_capacity();
+            if remaining <= 0 {
                 select! {
                     _ = sleep(Duration::from_millis(10)) => { continue; }
                     _ = cancel.cancelled() => { break; }
                 }
             }
+            let read_limit = (i64::from(self.config.max_records_per_call))
+                .min(remaining)
+                .min(i64::from(KINESIS_MAX_RECORDS))
+                .max(1) as i32;
 
             // Adaptive pacing: wait based on throughput budget consumed by the previous
             // response.  Enforces the 5 calls/sec hard limit (min 200ms) and additionally
@@ -686,7 +1123,7 @@ impl KinesisStreamsSource {
                 .get_records()
                 .stream_arn(&stream.arn)
                 .shard_iterator(&iter)
-                .limit(self.config.max_records_per_call.min(KINESIS_MAX_RECORDS))
+                .limit(read_limit)
                 .send()
                 .await;
 
@@ -701,6 +1138,11 @@ impl KinesisStreamsSource {
                         .map(|se| se.is_expired_iterator_exception())
                         .unwrap_or(false);
 
+                    let is_not_found = e
+                        .as_service_error()
+                        .map(|se| se.is_resource_not_found_exception())
+                        .unwrap_or(false);
+
                     if is_throughput_exceeded {
                         // Use a dedicated backoff starting at 1s (AWS recommendation).
                         // The sleep happens at the top of the next loop iteration.
@@ -712,7 +1154,8 @@ impl KinesisStreamsSource {
                             delay_ms = delay_ms,
                         );
                         next_call_delay = Duration::from_millis(delay_ms);
-                        throttle_backoff_ms = (throttle_backoff_ms * 2).min(THROTTLE_BACKOFF_MAX_MS);
+                        throttle_backoff_ms =
+                            (throttle_backoff_ms * 2).min(THROTTLE_BACKOFF_MAX_MS);
                         continue;
                     } else if is_expired {
                         warn!(message = "Shard iterator expired, refreshing.", shard = %shard_id);
@@ -723,6 +1166,8 @@ impl KinesisStreamsSource {
                                 &shard_id,
                                 &seq,
                                 self.config.start_from_oldest,
+                                shard_closed,
+                                is_child,
                             )
                             .await
                         {
@@ -733,8 +1178,24 @@ impl KinesisStreamsSource {
                             }
                             Err(re) => {
                                 error!(message = "Failed to refresh shard iterator.", error = %re);
+                                match iterator_error_action(re.is_resource_not_found()) {
+                                    IteratorErrorAction::Delete => {
+                                        shard_finished = true;
+                                        shard_gone = true;
+                                        break;
+                                    }
+                                    IteratorErrorAction::Release => {}
+                                }
                             }
                         }
+                    } else if is_not_found {
+                        warn!(
+                            message = "Shard no longer exists; completing consumer.",
+                            shard = %shard_id,
+                        );
+                        shard_finished = true;
+                        shard_gone = true;
+                        break;
                     } else if !cancel.is_cancelled() {
                         error!(
                             message = "GetRecords error.",
@@ -749,13 +1210,33 @@ impl KinesisStreamsSource {
                     continue;
                 }
                 Ok(output) => {
-                    match output.next_shard_iterator() {
-                        Some(next) if !next.is_empty() => iter = next.to_string(),
-                        _ => shard_finished = true,
+                    let child_shards_present = !output.child_shards().is_empty();
+                    if child_shards_present {
+                        shard_closed = true;
                     }
 
+                    let next_iterator_missing = match output.next_shard_iterator() {
+                        Some(next) if !next.is_empty() => {
+                            iter = next.to_string();
+                            false
+                        }
+                        _ => true,
+                    };
+
                     let records = output.records;
-                    if records.is_empty() {
+                    let records_empty = records.is_empty();
+
+                    if should_finish_shard_consumer(next_iterator_missing, child_shards_present) {
+                        debug!(
+                            message = "Shard reached an authoritative end.",
+                            shard = %shard_id,
+                            next_iterator_missing,
+                            child_shards_present,
+                        );
+                        shard_finished = true;
+                    }
+
+                    if records_empty {
                         // Shard is caught up; back off before the next poll.
                         // The sleep happens at the top of the next loop iteration.
                         let jitter_ms = simple_rand() as u64 % (backoff_ms / 2).max(1);
@@ -773,12 +1254,9 @@ impl KinesisStreamsSource {
                     // before issuing the next call (floored at poll_floor_ms).
                     backoff_ms = poll_floor_ms;
                     throttle_backoff_ms = THROTTLE_BACKOFF_INITIAL_MS;
-                    let response_bytes: u64 = records
-                        .iter()
-                        .map(|r| r.data().as_ref().len() as u64)
-                        .sum();
-                    let budget_ms = (response_bytes as f64
-                        / SHARD_READ_BUDGET_BYTES_PER_SEC as f64
+                    let response_bytes: u64 =
+                        records.iter().map(|r| r.data().as_ref().len() as u64).sum();
+                    let budget_ms = (response_bytes as f64 / SHARD_READ_BUDGET_BYTES_PER_SEC as f64
                         * 1000.0) as u64;
                     next_call_delay = Duration::from_millis(budget_ms.max(poll_floor_ms));
 
@@ -792,23 +1270,18 @@ impl KinesisStreamsSource {
 
                     for record in &records {
                         let seq_num = record.sequence_number().to_string();
-                        let record_events =
-                            self.decode_record(record, &stream.id, &shard_id);
+                        let record_events = self.decode_record(record, &stream.id, &shard_id);
                         for event in &record_events {
-                            events_received.emit(CountByteSize(
-                                1,
-                                event.estimated_json_encoded_size_of(),
-                            ));
+                            events_received
+                                .emit(CountByteSize(1, event.estimated_json_encoded_size_of()));
                         }
                         all_events.extend(record_events);
                         last_sequence = seq_num;
                     }
 
                     if all_events.is_empty() {
-                        // Records decoded to nothing. Nothing was tracked, so do not
-                        // call acknowledge (which would decrement in_flight below zero).
-                        // Only advance the acked sequence so the next checkpoint reflects
-                        // that these records were consumed.
+                        // Records decoded to nothing. Nothing was tracked, so record the
+                        // sequence as already delivered without decrementing in_flight.
                         tracker.advance_sequence(last_sequence);
                         if shard_finished {
                             break;
@@ -816,7 +1289,7 @@ impl KinesisStreamsSource {
                         continue;
                     }
 
-                    tracker.track(record_count);
+                    tracker.track(record_count, last_sequence.clone());
 
                     // Wire up acknowledgements.
                     let (batch, batch_receiver) =
@@ -829,27 +1302,31 @@ impl KinesisStreamsSource {
 
                     drop(batch);
 
-                    // Spawn ack handler.
-                    let tracker2 = Arc::clone(&tracker);
                     let ack_seq = last_sequence.clone();
-                    let ack_count = record_count;
+                    let acks_enabled = batch_receiver.is_some();
                     if let Some(receiver) = batch_receiver {
+                        let tracker2 = Arc::clone(&tracker);
                         tokio::spawn(async move {
                             let status = receiver.await;
                             if status == BatchStatus::Delivered {
-                                tracker2.acknowledge(ack_count, ack_seq);
+                                tracker2.acknowledge(ack_seq);
                             } else {
-                                tracker2.release(ack_count);
+                                tracker2.release(ack_seq);
                             }
                         });
-                    } else {
-                        // No acknowledgement mode: mark delivered immediately.
-                        tracker.acknowledge(record_count, last_sequence.clone());
                     }
 
                     if out.send_batch(events_with_batch).await.is_err() {
                         debug!(message = "Output channel closed, stopping.", shard = %shard_id);
+                        if !acks_enabled {
+                            tracker.release(last_sequence);
+                        }
                         break;
+                    }
+
+                    if !acks_enabled {
+                        // No acknowledgement mode: the channel accepted the batch.
+                        tracker.acknowledge(last_sequence);
                     }
 
                     if shard_finished {
@@ -859,12 +1336,43 @@ impl KinesisStreamsSource {
             }
         }
 
-        // Final cleanup.
-        let final_seq = tracker.acked_sequence();
-        if shard_finished && still_owned {
-            debug!(message = "Shard fully consumed; deleting checkpoint.", shard = %shard_id);
+        // Stop renewing before the final write so a heartbeat cannot race with
+        // releasing the lease.
+        heartbeat.stop().await;
+        if lost_lease.load(Ordering::Acquire) {
+            still_owned = false;
+            let seq = tracker.acked_sequence();
+            let _ = checkpointer.yield_shard(&stream.id, &shard_id, &seq).await;
+        }
+
+        // SHARD_END is terminal. Wait for in-flight batches and seal only when
+        // every one of them was delivered.
+        if shard_finished && still_owned && !shard_gone {
+            tracker.wait_until_settled(&cancel).await;
+        }
+        let seal_shard = shard_finished
+            && still_owned
+            && !shard_gone
+            && !tracker.has_rejection()
+            && !cancel.is_cancelled()
+            && !lost_lease.load(Ordering::Acquire);
+
+        if seal_shard {
+            debug!(
+                message = "Shard fully consumed; checkpointing SHARD_END.",
+                shard = %shard_id,
+            );
+            let _ = checkpointer
+                .checkpoint(&stream.id, &shard_id, SHARD_END, true)
+                .await;
+        } else if shard_finished && shard_gone && still_owned {
+            debug!(
+                message = "Shard gone; deleting leftover checkpoint.",
+                shard = %shard_id,
+            );
             let _ = checkpointer.delete(&stream.id, &shard_id).await;
         } else if still_owned {
+            let final_seq = tracker.acked_sequence();
             let _ = checkpointer
                 .checkpoint(&stream.id, &shard_id, &final_seq, true)
                 .await;
@@ -887,12 +1395,7 @@ impl KinesisStreamsSource {
     /// events and logs a warning rather than propagating an error to the caller.
     /// This is the equivalent of Logstash's `rescue => error` around `process_record`,
     /// ensuring that one malformed record cannot kill the entire shard consumer.
-    fn decode_record(
-        &self,
-        record: &Record,
-        stream_id: &str,
-        shard_id: &str,
-    ) -> Vec<Event> {
+    fn decode_record(&self, record: &Record, stream_id: &str, shard_id: &str) -> Vec<Event> {
         let data = record.data().as_ref().to_vec();
         let timestamp = record.approximate_arrival_timestamp().and_then(|ts| {
             let secs = ts.secs();
@@ -915,31 +1418,23 @@ impl KinesisStreamsSource {
                         if let Event::Log(ref mut log) = event {
                             match self.log_namespace {
                                 LogNamespace::Vector => {
+                                    self.log_namespace.insert_standard_vector_source_metadata(
+                                        log,
+                                        AwsKinesisStreamsConfig::NAME,
+                                        Utc::now(),
+                                    );
                                     if let Some(ts) = timestamp {
                                         log.try_insert(
-                                            metadata_path!(
-                                                "aws_kinesis_streams",
-                                                "timestamp"
-                                            ),
+                                            metadata_path!("aws_kinesis_streams", "timestamp"),
                                             ts,
                                         );
                                     }
-                                    log.insert(
-                                        metadata_path!("vector", "ingest_timestamp"),
-                                        Utc::now(),
-                                    );
                                     log.try_insert(
-                                        metadata_path!(
-                                            "aws_kinesis_streams",
-                                            "kinesis_stream"
-                                        ),
+                                        metadata_path!("aws_kinesis_streams", "kinesis_stream"),
                                         stream_id.to_string(),
                                     );
                                     log.try_insert(
-                                        metadata_path!(
-                                            "aws_kinesis_streams",
-                                            "kinesis_shard"
-                                        ),
+                                        metadata_path!("aws_kinesis_streams", "kinesis_shard"),
                                         shard_id.to_string(),
                                     );
                                     log.try_insert(
@@ -958,22 +1453,39 @@ impl KinesisStreamsSource {
                                     );
                                 }
                                 LogNamespace::Legacy => {
+                                    self.log_namespace.insert_vector_metadata(
+                                        log,
+                                        log_schema().source_type_key(),
+                                        path!("source_type"),
+                                        Bytes::from_static(
+                                            AwsKinesisStreamsConfig::NAME.as_bytes(),
+                                        ),
+                                    );
                                     if let Some(ts) = timestamp {
                                         if let Some(timestamp_key) = schema.timestamp_key() {
-                                            log.try_insert(
-                                                (PathPrefix::Event, timestamp_key),
-                                                ts,
-                                            );
+                                            log.try_insert((PathPrefix::Event, timestamp_key), ts);
                                         }
                                     }
-                                    log.try_insert("kinesis_stream", stream_id.to_string());
-                                    log.try_insert("kinesis_shard", shard_id.to_string());
                                     log.try_insert(
-                                        "kinesis_partition_key",
+                                        (PathPrefix::Event, &owned_value_path!("kinesis_stream")),
+                                        stream_id.to_string(),
+                                    );
+                                    log.try_insert(
+                                        (PathPrefix::Event, &owned_value_path!("kinesis_shard")),
+                                        shard_id.to_string(),
+                                    );
+                                    log.try_insert(
+                                        (
+                                            PathPrefix::Event,
+                                            &owned_value_path!("kinesis_partition_key"),
+                                        ),
                                         partition_key.clone(),
                                     );
                                     log.try_insert(
-                                        "kinesis_sequence_number",
+                                        (
+                                            PathPrefix::Event,
+                                            &owned_value_path!("kinesis_sequence_number"),
+                                        ),
                                         seq_num.clone(),
                                     );
                                 }
@@ -998,6 +1510,112 @@ impl KinesisStreamsSource {
         }
 
         events
+    }
+}
+
+/// Renews `LeaseTimeout` on its own task so a blocked `send_batch` or a failed
+/// sequence checkpoint cannot look like a dead consumer.
+struct LeaseHeartbeat {
+    cancel: CancellationToken,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl LeaseHeartbeat {
+    fn spawn(
+        checkpointer: Arc<KinesisCheckpointer>,
+        lost_lease: Arc<AtomicBool>,
+        parent: CancellationToken,
+        stream_id: String,
+        shard_id: String,
+        lease_period: Duration,
+    ) -> Self {
+        let cancel = parent.child_token();
+        let task_cancel = cancel.clone();
+        let interval = (lease_period / 3).max(Duration::from_secs(1));
+        let task = tokio::spawn(async move {
+            loop {
+                select! {
+                    _ = sleep(interval) => {}
+                    _ = task_cancel.cancelled() => break,
+                }
+                if task_cancel.is_cancelled() {
+                    break;
+                }
+                match checkpointer.renew_lease(&stream_id, &shard_id).await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        lost_lease.store(true, Ordering::Release);
+                        debug!(
+                            message = "Lease heartbeat lost shard ownership.",
+                            shard = %shard_id,
+                        );
+                        break;
+                    }
+                    Err(e) => {
+                        warn!(
+                            message = "Failed to renew shard lease; will retry.",
+                            shard = %shard_id,
+                            error = %e,
+                        );
+                    }
+                }
+            }
+        });
+        Self {
+            cancel,
+            task: Some(task),
+        }
+    }
+
+    async fn stop(mut self) {
+        self.cancel.cancel();
+        if let Some(task) = self.task.take() {
+            let _ = task.await;
+        }
+    }
+}
+
+impl Drop for LeaseHeartbeat {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
+/// Error obtaining a Kinesis shard iterator.
+#[derive(Debug)]
+enum ShardIteratorError {
+    ResourceNotFound(String),
+    Other(String),
+}
+
+impl ShardIteratorError {
+    fn new(resource_not_found: bool, fallback: bool, ctx: impl std::fmt::Display) -> Self {
+        let prefix = if fallback {
+            "GetShardIterator fallback error"
+        } else {
+            "GetShardIterator error"
+        };
+        let msg = format!("{prefix}: {ctx}");
+        if resource_not_found {
+            Self::ResourceNotFound(msg)
+        } else {
+            Self::Other(msg)
+        }
+    }
+
+    fn is_resource_not_found(&self) -> bool {
+        matches!(self, Self::ResourceNotFound(_))
+    }
+}
+
+impl std::fmt::Display for ShardIteratorError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ResourceNotFound(m) | Self::Other(m) => f.write_str(m),
+        }
     }
 }
 

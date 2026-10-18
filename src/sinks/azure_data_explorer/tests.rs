@@ -18,13 +18,19 @@ use crate::{
     http::HttpClient,
     sinks::{
         prelude::*,
-        util::{http::http_response_retry_logic, service::GlobalTowerRequestConfigDefaults},
+        util::{
+            http::{RetryStrategy, http_response_retry_logic},
+            service::GlobalTowerRequestConfigDefaults,
+        },
     },
+    template::{ConfinementConfig, Template},
     test_util::{
         components::{HTTP_SINK_TAGS, run_and_assert_sink_compliance},
         http::spawn_blackhole_http_server,
     },
 };
+use vector_lib::lookup::PathPrefix;
+use vrl::event_path;
 
 // ---------------------------------------------------------------------------
 // Mock HTTP handlers
@@ -165,7 +171,10 @@ fn config_streaming_is_default() {
     )
     .unwrap();
 
-    assert!(matches!(config.ingestion_method, IngestionMethod::Streaming));
+    assert!(matches!(
+        config.ingestion_method,
+        IngestionMethod::Streaming
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -181,12 +190,12 @@ fn encoder_produces_jsonl_without_mutation() {
     };
 
     let mut event1 = LogEvent::default();
-    event1.insert("message", "hello world");
-    event1.insert("host", "server01");
+    event1.insert(event_path!("message"), "hello world");
+    event1.insert(event_path!("host"), "server01");
 
     let mut event2 = LogEvent::default();
-    event2.insert("message", "second event");
-    event2.insert("count", 42);
+    event2.insert(event_path!("message"), "second event");
+    event2.insert(event_path!("count"), 42);
 
     let events = vec![Event::Log(event1), Event::Log(event2)];
 
@@ -224,7 +233,7 @@ fn encoder_single_event_no_trailing_newline() {
     };
 
     let mut event = LogEvent::default();
-    event.insert("key", "value");
+    event.insert(event_path!("key"), "value");
 
     let events = vec![Event::Log(event)];
     let mut buf = Vec::new();
@@ -246,9 +255,9 @@ fn encoder_with_transformer_field_filtering() {
     let encoder = AzureDataExplorerEncoder { transformer };
 
     let mut event = LogEvent::default();
-    event.insert("message", "keep me");
-    event.insert("host", "drop me");
-    event.insert("extra", "also drop");
+    event.insert(event_path!("message"), "keep me");
+    event.insert(event_path!("host"), "drop me");
+    event.insert(event_path!("extra"), "also drop");
 
     let events = vec![Event::Log(event)];
     let mut buf = Vec::new();
@@ -259,8 +268,14 @@ fn encoder_with_transformer_field_filtering() {
         serde_json::from_str(&output).expect("valid JSON");
 
     assert_eq!(obj.get("message").and_then(|v| v.as_str()), Some("keep me"));
-    assert!(obj.get("host").is_none(), "filtered field 'host' should be absent");
-    assert!(obj.get("extra").is_none(), "filtered field 'extra' should be absent");
+    assert!(
+        obj.get("host").is_none(),
+        "filtered field 'host' should be absent"
+    );
+    assert!(
+        obj.get("extra").is_none(),
+        "filtered field 'extra' should be absent"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -270,9 +285,20 @@ fn encoder_with_transformer_field_filtering() {
 fn make_log_event(fields: &[(&str, &str)]) -> Event {
     let mut log = LogEvent::default();
     for (k, v) in fields {
-        log.insert(*k, *v);
+        let field_path = vrl::path::parse_value_path(k).expect("event field path");
+        log.insert((PathPrefix::Event, &field_path), *v);
     }
     Event::Log(log)
+}
+
+fn confine_table(raw: &str) -> ConfinedTemplate {
+    let template: Template = raw.try_into().expect("valid template");
+    let confinement = ConfinementConfig {
+        dangerously_allow_unconfined_template_resolution: true,
+    };
+    template
+        .confine(&confinement, "azure_data_explorer", "table")
+        .expect("table template")
 }
 
 fn make_partitioner(
@@ -282,7 +308,7 @@ fn make_partitioner(
 ) -> AdxPartitioner {
     AdxPartitioner {
         table_field: table_field.map(String::from),
-        table: table.map(|s| s.try_into().expect("valid template")),
+        table: table.map(confine_table),
         default_table: default_table.map(String::from),
     }
 }
@@ -309,10 +335,7 @@ fn partitioner_static_template_used_when_no_field() {
 fn partitioner_dynamic_template_resolves_from_event() {
     let p = make_partitioner(None, Some("{{ env }}_logs"), None);
     let event = make_log_event(&[("env", "production")]);
-    assert_eq!(
-        p.partition(&event),
-        Some("production_logs".to_string())
-    );
+    assert_eq!(p.partition(&event), Some("production_logs".to_string()));
 }
 
 #[test]
@@ -369,7 +392,10 @@ async fn component_spec_compliance_streaming() {
     let request_limits =
         TowerRequestConfig::<GlobalTowerRequestConfigDefaults>::default().into_settings();
     let service = ServiceBuilder::new()
-        .settings(request_limits, http_response_retry_logic())
+        .settings(
+            request_limits,
+            http_response_retry_logic(RetryStrategy::default()),
+        )
         .service(service);
 
     let batch_settings = BatchConfig::<super::config::StreamingBatchSettings>::default()
@@ -380,7 +406,7 @@ async fn component_spec_compliance_streaming() {
 
     let partitioner = AdxPartitioner {
         table_field: None,
-        table: Some("testtable".try_into().unwrap()),
+        table: Some(confine_table("testtable")),
         default_table: None,
     };
 

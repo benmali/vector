@@ -20,7 +20,7 @@ use aws_sdk_dynamodb::{
 };
 use chrono::{DateTime, Utc};
 
-use crate::sources::aws_kinesis_streams::DynamoDbCheckpointConfig;
+use crate::sources::aws_kinesis_streams::{DynamoDbCheckpointConfig, closed_shard::SHARD_END};
 
 /// Error type for checkpointing operations.
 #[derive(Debug)]
@@ -54,6 +54,8 @@ pub struct ClientClaim {
 pub struct CheckpointData {
     /// All shard IDs that have a checkpoint row (regardless of who owns them).
     pub shards_with_checkpoints: HashMap<String, bool>,
+    /// Last checkpointed sequence per shard (`SHARD_END` when fully consumed).
+    pub sequence_numbers: HashMap<String, String>,
     /// Map from client_id → list of claimed shards.
     pub client_claims: HashMap<String, Vec<ClientClaim>>,
 }
@@ -109,9 +111,11 @@ impl KinesisCheckpointer {
                     .map(|se| se.is_resource_not_found_exception())
                     .unwrap_or(false);
                 if !is_not_found {
-                    return Err(
-                        format!("DynamoDB DescribeTable error: {}", DisplayErrorContext(&e)).into(),
-                    );
+                    return Err(format!(
+                        "DynamoDB DescribeTable error: {}",
+                        DisplayErrorContext(&e)
+                    )
+                    .into());
                 }
             }
         }
@@ -174,15 +178,12 @@ impl KinesisCheckpointer {
             );
         }
 
-        builder
-            .send()
-            .await
-            .map_err(|e| {
-                format!(
-                    "Failed to create DynamoDB table: {}",
-                    DisplayErrorContext(&e)
-                )
-            })?;
+        builder.send().await.map_err(|e| {
+            format!(
+                "Failed to create DynamoDB table: {}",
+                DisplayErrorContext(&e)
+            )
+        })?;
         Ok(())
     }
 
@@ -241,6 +242,7 @@ impl KinesisCheckpointer {
     ) -> crate::Result<CheckpointData> {
         let mut data = CheckpointData {
             shards_with_checkpoints: HashMap::new(),
+            sequence_numbers: HashMap::new(),
             client_claims: HashMap::new(),
         };
 
@@ -276,6 +278,13 @@ impl KinesisCheckpointer {
 
                 data.shards_with_checkpoints.insert(shard_id.clone(), true);
 
+                let sequence_number = match item.get("SequenceNumber") {
+                    Some(AttributeValue::S(s)) => s.clone(),
+                    _ => String::new(),
+                };
+                data.sequence_numbers
+                    .insert(shard_id.clone(), sequence_number);
+
                 let client_id = match item.get("ClientID") {
                     Some(AttributeValue::S(s)) => s.clone(),
                     _ => continue, // no owner, orphaned checkpoint
@@ -288,14 +297,13 @@ impl KinesisCheckpointer {
                             return Err(format!(
                                 "Failed to parse LeaseTimeout for shard {shard_id}: {e}"
                             )
-                            .into())
+                            .into());
                         }
                     },
                     _ => {
-                        return Err(format!(
-                            "Missing LeaseTimeout for claimed shard {shard_id}"
-                        )
-                        .into())
+                        return Err(
+                            format!("Missing LeaseTimeout for claimed shard {shard_id}").into()
+                        );
                     }
                 };
 
@@ -363,9 +371,7 @@ impl KinesisCheckpointer {
             .key("StreamID", AttributeValue::S(stream_id.to_string()))
             .key("ShardID", AttributeValue::S(shard_id.to_string()))
             .condition_expression(condition_expr)
-            .update_expression(
-                "SET ClientID = :new_client_id, LeaseTimeout = :new_lease_timeout",
-            )
+            .update_expression("SET ClientID = :new_client_id, LeaseTimeout = :new_lease_timeout")
             .return_values(ReturnValue::AllOld);
 
         for (k, v) in attr_values.drain() {
@@ -471,10 +477,7 @@ impl KinesisCheckpointer {
             .table_name(&self.conf.table)
             .set_item(Some(item))
             .condition_expression("ClientID = :client_id")
-            .expression_attribute_values(
-                ":client_id",
-                AttributeValue::S(self.client_id.clone()),
-            )
+            .expression_attribute_values(":client_id", AttributeValue::S(self.client_id.clone()))
             .send()
             .await;
 
@@ -493,9 +496,47 @@ impl KinesisCheckpointer {
         }
     }
 
-    /// Update only the `SequenceNumber` field of an existing checkpoint row.
-    /// Used when yielding a shard to allow the new owner to start from the latest
-    /// sequence rather than the sequence at the time of the steal.
+    /// Extend `LeaseTimeout` without changing the checkpoint sequence.
+    ///
+    /// Returns `Ok(false)` when this client no longer owns the row. Other DynamoDB
+    /// failures are returned so the caller can retry on the next heartbeat.
+    pub async fn renew_lease(&self, stream_id: &str, shard_id: &str) -> crate::Result<bool> {
+        let result = self
+            .svc
+            .update_item()
+            .table_name(&self.conf.table)
+            .key("StreamID", AttributeValue::S(stream_id.to_string()))
+            .key("ShardID", AttributeValue::S(shard_id.to_string()))
+            .update_expression("SET LeaseTimeout = :new_lease_timeout")
+            .condition_expression("ClientID = :client_id")
+            .expression_attribute_values(
+                ":new_lease_timeout",
+                AttributeValue::S(format_lease_timeout(self.lease_duration)),
+            )
+            .expression_attribute_values(":client_id", AttributeValue::S(self.client_id.clone()))
+            .send()
+            .await;
+
+        match result {
+            Ok(_) => Ok(true),
+            Err(e) => {
+                let is_condition_failed = e
+                    .as_service_error()
+                    .map(|se| se.is_conditional_check_failed_exception())
+                    .unwrap_or(false);
+                if is_condition_failed {
+                    return Ok(false);
+                }
+                Err(format!("DynamoDB UpdateItem error: {}", DisplayErrorContext(&e)).into())
+            }
+        }
+    }
+
+    /// Update `SequenceNumber` after this client has lost the lease.
+    ///
+    /// The write succeeds only when another client owns the row, the stored sequence
+    /// is not `SHARD_END`, and it is still lexicographically behind `sequence_number`.
+    /// A failed condition means the new owner already moved on.
     pub async fn yield_shard(
         &self,
         stream_id: &str,
@@ -506,20 +547,38 @@ impl KinesisCheckpointer {
             return Ok(());
         }
 
-        self.svc
+        let result = self
+            .svc
             .update_item()
             .table_name(&self.conf.table)
             .key("StreamID", AttributeValue::S(stream_id.to_string()))
             .key("ShardID", AttributeValue::S(shard_id.to_string()))
             .update_expression("SET SequenceNumber = :new_sequence_number")
+            .condition_expression(
+                "ClientID <> :self AND (attribute_not_exists(SequenceNumber) OR (SequenceNumber <> :shard_end AND SequenceNumber < :new_sequence_number))",
+            )
             .expression_attribute_values(
                 ":new_sequence_number",
                 AttributeValue::S(sequence_number.to_string()),
             )
+            .expression_attribute_values(":self", AttributeValue::S(self.client_id.clone()))
+            .expression_attribute_values(":shard_end", AttributeValue::S(SHARD_END.to_string()))
             .send()
-            .await
-            .map_err(|e| format!("DynamoDB UpdateItem error: {}", DisplayErrorContext(&e)))?;
-        Ok(())
+            .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let is_condition_failed = e
+                    .as_service_error()
+                    .map(|se| se.is_conditional_check_failed_exception())
+                    .unwrap_or(false);
+                if is_condition_failed {
+                    return Ok(());
+                }
+                Err(format!("DynamoDB UpdateItem error: {}", DisplayErrorContext(&e)).into())
+            }
+        }
     }
 
     /// Delete a checkpoint row entirely. Called when a shard has been fully consumed

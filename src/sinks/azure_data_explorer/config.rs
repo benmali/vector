@@ -31,13 +31,17 @@ use super::{
     sink::{AdxPartitioner, AzureDataExplorerSink},
 };
 use crate::{
+    config::ValidatedSink,
     http::HttpClient,
     sinks::{
         azure_common::config::AzureAuthentication,
         prelude::*,
-        util::{BatchConfig, http::http_response_retry_logic},
+        util::{
+            BatchConfig,
+            http::{RetryStrategy, http_response_retry_logic},
+        },
     },
-    template::Template,
+    template::{ConfinementConfig, Template},
 };
 
 // ---------------------------------------------------------------------------
@@ -124,12 +128,10 @@ pub struct AzureDataExplorerConfig {
     pub(super) database: String,
 
     /// The ingestion mode: `streaming` (default) or `queued`.
-    #[configurable(derived)]
     #[serde(default)]
     pub(super) ingestion_method: IngestionMethod,
 
     // ---- Table routing ----
-
     /// The target table. Supports [template syntax][template] for dynamic routing,
     /// e.g. `{{ kubernetes.namespace }}_logs` or a static `my_table`.
     ///
@@ -161,16 +163,13 @@ pub struct AzureDataExplorerConfig {
     pub(super) default_table: Option<String>,
 
     // ---- Auth ----
-
     /// Azure authentication configuration.
     ///
     /// Supports `client_secret_credential`, `managed_identity`, `workload_identity`,
     /// `azure_cli`, `client_certificate_credential`, and `managed_identity_client_assertion`.
-    #[configurable(derived)]
     pub(super) auth: AzureAuthentication,
 
     // ---- Ingestion options ----
-
     /// Optional ingestion mapping reference name (`mappingName` query parameter for streaming,
     /// `jsonMappingReference` in the queued ingestion message).
     ///
@@ -189,7 +188,6 @@ pub struct AzureDataExplorerConfig {
     pub(super) ingestion_resources_refresh_interval_secs: u64,
 
     // ---- Batching, encoding, compression ----
-
     /// Batch configuration.
     ///
     /// For streaming ingestion the defaults are 500 events / 3.9 MB / 10 s.
@@ -197,15 +195,12 @@ pub struct AzureDataExplorerConfig {
     /// For queued ingestion, the recommended settings to match Fluent Bit defaults are
     /// `max_bytes = 200_000_000` (200 MB) and `timeout_secs = 1800` (30 min), with no
     /// event count cap. The hard maximum for queued ingestion is 4,000,000,000 bytes (4 GB).
-    #[configurable(derived)]
     #[serde(default)]
     pub(super) batch: BatchConfig<StreamingBatchSettings>,
 
-    #[configurable(derived)]
     #[serde(default)]
     pub(super) request: TowerRequestConfig,
 
-    #[configurable(derived)]
     #[serde(default, skip_serializing_if = "crate::serde::is_default")]
     pub(super) encoding: Transformer,
 
@@ -213,17 +208,20 @@ pub struct AzureDataExplorerConfig {
     ///
     /// For streaming ingestion, gzip sets `Content-Encoding: gzip`.
     /// For queued ingestion, gzip compresses the blob (`.multijson.gz` extension).
-    #[configurable(derived)]
     #[serde(default = "Compression::gzip_default")]
     pub(super) compression: Compression,
 
-    #[configurable(derived)]
     #[serde(
         default,
         deserialize_with = "crate::serde::bool_or_struct",
         skip_serializing_if = "crate::serde::is_default"
     )]
     pub(super) acknowledgements: AcknowledgementsConfig,
+
+    /// Template confinement for `table`. A fully dynamic table name is rejected
+    /// unless confinement is explicitly disabled on this sink.
+    #[serde(flatten)]
+    pub(super) confinement: ConfinementConfig,
 }
 
 fn default_ingestion_resources_refresh_interval() -> u64 {
@@ -231,35 +229,110 @@ fn default_ingestion_resources_refresh_interval() -> u64 {
 }
 
 impl GenerateConfig for AzureDataExplorerConfig {
-    fn generate_config() -> toml::Value {
-        toml::from_str(
-            r#"ingestion_endpoint = "https://mycluster.eastus.kusto.windows.net"
-            database = "my_database"
-            table = "my_table"
-
-            [auth]
-            azure_credential_kind = "client_secret_credential"
-            azure_tenant_id = "${AZURE_TENANT_ID}"
-            azure_client_id = "${AZURE_CLIENT_ID}"
-            azure_client_secret = "${AZURE_CLIENT_SECRET}"
-            "#,
-        )
-        .unwrap()
+    fn generate_config() -> serde_json::Value {
+        serde_json::json!({
+            "ingestion_endpoint": "https://mycluster.eastus.kusto.windows.net",
+            "database": "my_database",
+            "table": "my_table",
+            "auth": {
+                "azure_credential_kind": "client_secret_credential",
+                "azure_tenant_id": "${AZURE_TENANT_ID}",
+                "azure_client_id": "${AZURE_CLIENT_ID}",
+                "azure_client_secret": "${AZURE_CLIENT_SECRET}"
+            }
+        })
     }
 }
 
 #[async_trait::async_trait]
 #[typetag::serde(name = "azure_data_explorer")]
 impl SinkConfig for AzureDataExplorerConfig {
-    async fn build(&self, cx: SinkContext) -> crate::Result<(VectorSink, Healthcheck)> {
-        self.validate()?;
+    fn input(&self) -> Input {
+        let requirement = Requirement::empty().optional_meaning("timestamp", Kind::timestamp());
+        Input::log().with_schema_requirement(requirement)
+    }
 
+    fn acknowledgements(&self) -> &AcknowledgementsConfig {
+        &self.acknowledgements
+    }
+
+    fn confinement_config(&self) -> Option<&ConfinementConfig> {
+        Some(&self.confinement)
+    }
+}
+
+pub struct ValidatedAzureDataExplorer {
+    batch_settings: BatcherSettings,
+    confined_table: Option<ConfinedTemplate>,
+}
+
+#[async_trait::async_trait]
+impl ValidatedSink for AzureDataExplorerConfig {
+    type Validated = ValidatedAzureDataExplorer;
+
+    fn validate(&self) -> crate::Result<Self::Validated> {
+        if self.table.is_none() && self.table_field.is_none() && self.default_table.is_none() {
+            return Err(
+                "At least one of `table`, `table_field`, or `default_table` must be set".into(),
+            );
+        }
+
+        if self.table_field.is_some() && self.default_table.is_none() {
+            warn!(
+                message = "No `default_table` is configured. Events without the `table_field` \
+                           field will be dropped.",
+            );
+        }
+
+        if matches!(self.ingestion_method, IngestionMethod::Queued) {
+            if let Some(max_bytes) = self.batch.max_bytes {
+                if max_bytes > QUEUED_MAX_BYTES_HARD_LIMIT {
+                    return Err(format!(
+                        "batch.max_bytes ({max_bytes}) exceeds the queued ingestion hard \
+                         limit of {QUEUED_MAX_BYTES_HARD_LIMIT} bytes (~4 GB)"
+                    )
+                    .into());
+                }
+            }
+        }
+
+        let confined_table = self
+            .table
+            .clone()
+            .map(|table| table.confine(&self.confinement, Self::NAME, "table"))
+            .transpose()?;
+
+        let batch_settings = match self.ingestion_method {
+            IngestionMethod::Streaming => self.batch.validate()?.into_batcher_settings()?,
+            IngestionMethod::Queued
+                if self.batch.max_bytes.is_none()
+                    && self.batch.max_events.is_none()
+                    && self.batch.timeout_secs.is_none() =>
+            {
+                BatchConfig::<QueuedBatchSettings>::default()
+                    .validate()?
+                    .into_batcher_settings()?
+            }
+            IngestionMethod::Queued => self.batch.validate()?.into_batcher_settings()?,
+        };
+
+        Ok(ValidatedAzureDataExplorer {
+            batch_settings,
+            confined_table,
+        })
+    }
+
+    async fn build(
+        &self,
+        validated: &Self::Validated,
+        cx: SinkContext,
+    ) -> crate::Result<(VectorSink, Healthcheck)> {
         let client = HttpClient::new(None, cx.proxy())?;
         let auth = AzureDataExplorerAuth::new(&self.auth).await?;
 
         let partitioner = AdxPartitioner {
             table_field: self.table_field.clone(),
-            table: self.table.clone(),
+            table: validated.confined_table.clone(),
             default_table: self.default_table.clone(),
         };
 
@@ -277,54 +350,35 @@ impl SinkConfig for AzureDataExplorerConfig {
             compression: self.compression,
         };
 
-        let request_limits = self.request.into_settings();
+        let batch_settings = validated.batch_settings;
 
         let (sink, healthcheck) = match self.ingestion_method {
             IngestionMethod::Streaming => {
-                let batch_settings = self.batch.validate()?.into_batcher_settings()?;
-
                 let service = AzureDataExplorerService::new_streaming(
                     client.clone(),
                     auth.clone(),
                     ingest_config.clone(),
                 );
                 let service = ServiceBuilder::new()
-                    .settings(request_limits, http_response_retry_logic())
+                    .settings(
+                        self.request.into_settings(),
+                        http_response_retry_logic(RetryStrategy::default()),
+                    )
                     .service(service);
 
-                let sink =
-                    AzureDataExplorerSink::new(service, batch_settings, request_builder, partitioner);
+                let sink = AzureDataExplorerSink::new(
+                    service,
+                    batch_settings,
+                    request_builder,
+                    partitioner,
+                );
 
-                let healthcheck = healthcheck_streaming(self.ingestion_endpoint.clone(), auth).boxed();
+                let healthcheck =
+                    healthcheck_streaming(self.ingestion_endpoint.clone(), auth).boxed();
                 (VectorSink::from_event_streamsink(sink), healthcheck)
             }
 
             IngestionMethod::Queued => {
-                // Validate queued-specific constraints
-                if let Some(max_bytes) = self.batch.max_bytes {
-                    if max_bytes > QUEUED_MAX_BYTES_HARD_LIMIT {
-                        return Err(format!(
-                            "batch.max_bytes ({max_bytes}) exceeds the queued ingestion hard \
-                             limit of {QUEUED_MAX_BYTES_HARD_LIMIT} bytes (~4 GB)"
-                        )
-                        .into());
-                    }
-                }
-
-                // When user has not configured any batch field, apply queued defaults
-                // (200 MB / 30 min / no event cap) matching Fluent Bit behavior.
-                // Otherwise, honour the user's explicit settings.
-                let batch_settings = if self.batch.max_bytes.is_none()
-                    && self.batch.max_events.is_none()
-                    && self.batch.timeout_secs.is_none()
-                {
-                    BatchConfig::<QueuedBatchSettings>::default()
-                        .validate()?
-                        .into_batcher_settings()?
-                } else {
-                    self.batch.validate()?.into_batcher_settings()?
-                };
-
                 let resource_manager = ResourceManager::new(
                     auth.clone(),
                     client.clone(),
@@ -339,50 +393,26 @@ impl SinkConfig for AzureDataExplorerConfig {
                     resource_manager.clone(),
                 );
                 let service = ServiceBuilder::new()
-                    .settings(request_limits, http_response_retry_logic())
+                    .settings(
+                        self.request.into_settings(),
+                        http_response_retry_logic(RetryStrategy::default()),
+                    )
                     .service(service);
 
-                let sink =
-                    AzureDataExplorerSink::new(service, batch_settings, request_builder, partitioner);
+                let sink = AzureDataExplorerSink::new(
+                    service,
+                    batch_settings,
+                    request_builder,
+                    partitioner,
+                );
 
-                let healthcheck =
-                    healthcheck_queued(self.ingestion_endpoint.clone(), auth).boxed();
+                let healthcheck = healthcheck_queued(self.ingestion_endpoint.clone(), auth).boxed();
                 (VectorSink::from_event_streamsink(sink), healthcheck)
             }
         };
 
         Ok((sink, healthcheck))
     }
-
-    fn input(&self) -> Input {
-        let requirement = Requirement::empty().optional_meaning("timestamp", Kind::timestamp());
-        Input::log().with_schema_requirement(requirement)
-    }
-
-    fn acknowledgements(&self) -> &AcknowledgementsConfig {
-        &self.acknowledgements
-    }
-}
-
-impl AzureDataExplorerConfig {
-    /// Validates the configuration at build time.
-    fn validate(&self) -> crate::Result<()> {
-        if self.table.is_none() && self.table_field.is_none() && self.default_table.is_none() {
-            return Err(
-                "At least one of `table`, `table_field`, or `default_table` must be set".into(),
-            );
-        }
-
-        if self.table_field.is_some() && self.default_table.is_none() {
-            warn!(
-                message = "No `default_table` is configured. Events without the `table_field` \
-                           field will be dropped.",
-            );
-        }
-
-        Ok(())
-    }
-
 }
 
 // ---------------------------------------------------------------------------
