@@ -5,21 +5,24 @@
 #![deny(warnings)]
 
 mod common;
+mod decoder_framed_read;
 pub mod decoding;
 pub mod encoding;
 pub mod gelf;
 pub mod internal_events;
 mod ready_frames;
 
+pub use decoder_framed_read::DecoderFramedRead;
 pub use decoding::{
     BytesDecoder, BytesDecoderConfig, BytesDeserializer, BytesDeserializerConfig,
-    CharacterDelimitedDecoder, CharacterDelimitedDecoderConfig, Decoder, DecodingConfig,
-    GelfDeserializer, GelfDeserializerConfig, JsonDeserializer, JsonDeserializerConfig,
-    LengthDelimitedDecoder, LengthDelimitedDecoderConfig, NativeDeserializer,
-    NativeDeserializerConfig, NativeJsonDeserializer, NativeJsonDeserializerConfig,
-    NewlineDelimitedDecoder, NewlineDelimitedDecoderConfig, OctetCountingDecoder,
-    OctetCountingDecoderConfig, StreamDecodingError, VarintLengthDelimitedDecoder,
-    VarintLengthDelimitedDecoderConfig,
+    CharacterDelimitedDecoder, CharacterDelimitedDecoderConfig,
+    CloudwatchLogsDeserializer, CloudwatchLogsDeserializerConfig, CloudwatchLogsDeserializerOptions,
+    Decoder, DecodingConfig, GelfDeserializer, GelfDeserializerConfig, JsonDeserializer,
+    JsonDeserializerConfig, LengthDelimitedDecoder, LengthDelimitedDecoderConfig,
+    NativeDeserializer, NativeDeserializerConfig, NativeJsonDeserializer,
+    NativeJsonDeserializerConfig, NewlineDelimitedDecoder, NewlineDelimitedDecoderConfig,
+    OctetCountingDecoder, OctetCountingDecoderConfig, StreamDecodingError,
+    VarintLengthDelimitedDecoder, VarintLengthDelimitedDecoderConfig,
 };
 #[cfg(feature = "syslog")]
 pub use decoding::{SyslogDeserializer, SyslogDeserializerConfig};

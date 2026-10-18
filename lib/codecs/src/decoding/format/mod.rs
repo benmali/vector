@@ -5,6 +5,7 @@
 
 mod avro;
 mod bytes;
+mod cloudwatch_logs;
 mod gelf;
 mod influxdb;
 mod json;
@@ -19,6 +20,10 @@ mod vrl;
 
 use ::bytes::Bytes;
 pub use avro::{AvroDeserializer, AvroDeserializerConfig, AvroDeserializerOptions};
+pub use cloudwatch_logs::{
+    CloudwatchLogsDeserializer, CloudwatchLogsDeserializerConfig,
+    CloudwatchLogsDeserializerOptions,
+};
 use dyn_clone::DynClone;
 pub use gelf::{GelfDeserializer, GelfDeserializerConfig, GelfDeserializerOptions};
 pub use influxdb::{InfluxdbDeserializer, InfluxdbDeserializerConfig};
@@ -50,6 +55,8 @@ pub trait Deserializer: DynClone + Send + Sync {
     /// by not requiring heap allocations for it.
     ///
     /// **Note**: The type of the produced events depends on the implementation.
+    ///
+    /// TODO: <https://github.com/vectordotdev/vector/issues/25044>
     fn parse(
         &self,
         bytes: Bytes,

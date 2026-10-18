@@ -64,3 +64,5 @@ volumes/
 
 # LLM tools
 copilot-instructions.md
+.cursor/*
+.vscode/*

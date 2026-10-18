@@ -174,6 +174,9 @@ fn deserializer_config_to_serializer(config: &DeserializerConfig) -> encoding::S
         DeserializerConfig::Vrl { .. } => unimplemented!(),
         #[cfg(feature = "codecs-opentelemetry")]
         DeserializerConfig::Otlp { .. } => SerializerConfig::Otlp,
+        // CloudWatch Logs has no matching serializer; use JSON as the closest equivalent
+        // since the underlying payload is JSON.
+        DeserializerConfig::CloudwatchLogs(_) => SerializerConfig::Json(JsonSerializerConfig::default()),
     };
 
     serializer_config

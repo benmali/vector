@@ -14,8 +14,9 @@ pub use config::DecodingConfig;
 pub use decoder::Decoder;
 pub use error::StreamDecodingError;
 pub use format::{
-    BoxedDeserializer, BytesDeserializer, BytesDeserializerConfig, GelfDeserializer,
-    GelfDeserializerConfig, GelfDeserializerOptions, InfluxdbDeserializer,
+    BoxedDeserializer, BytesDeserializer, BytesDeserializerConfig,
+    CloudwatchLogsDeserializer, CloudwatchLogsDeserializerConfig, CloudwatchLogsDeserializerOptions,
+    GelfDeserializer, GelfDeserializerConfig, GelfDeserializerOptions, InfluxdbDeserializer,
     InfluxdbDeserializerConfig, JsonDeserializer, JsonDeserializerConfig, JsonDeserializerOptions,
     NativeDeserializer, NativeDeserializerConfig, NativeJsonDeserializer,
     NativeJsonDeserializerConfig, NativeJsonDeserializerOptions, ProtobufDeserializer,
@@ -323,6 +324,17 @@ pub enum DeserializerConfig {
     ///
     /// [vrl]: https://vector.dev/docs/reference/vrl
     Vrl(VrlDeserializerConfig),
+
+    /// Decodes the raw bytes as a [CloudWatch Logs][cw_logs] subscription filter message.
+    ///
+    /// Each Kinesis record from a CloudWatch Logs subscription filter contains a
+    /// gzip-compressed JSON envelope. This codec decompresses, parses the envelope, and
+    /// emits one event per entry in the `logEvents` array. Shared envelope fields such as
+    /// `owner`, `logGroup`, `logStream`, `subscriptionFilters`, and `messageType` are
+    /// merged into every produced event.
+    ///
+    /// [cw_logs]: https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/SubscriptionFilters.html
+    CloudwatchLogs(CloudwatchLogsDeserializerConfig),
 }
 
 impl From<BytesDeserializerConfig> for DeserializerConfig {
@@ -368,6 +380,12 @@ impl From<InfluxdbDeserializerConfig> for DeserializerConfig {
     }
 }
 
+impl From<CloudwatchLogsDeserializerConfig> for DeserializerConfig {
+    fn from(config: CloudwatchLogsDeserializerConfig) -> Self {
+        Self::CloudwatchLogs(config)
+    }
+}
+
 impl DeserializerConfig {
     /// Build the `Deserializer` from this configuration.
     pub fn build(&self) -> vector_common::Result<Deserializer> {
@@ -392,6 +410,9 @@ impl DeserializerConfig {
             DeserializerConfig::Gelf(config) => Ok(Deserializer::Gelf(config.build())),
             DeserializerConfig::Influxdb(config) => Ok(Deserializer::Influxdb(config.build())),
             DeserializerConfig::Vrl(config) => Ok(Deserializer::Vrl(config.build()?)),
+            DeserializerConfig::CloudwatchLogs(config) => {
+                Ok(Deserializer::CloudwatchLogs(config.build()))
+            }
         }
     }
 
@@ -415,6 +436,7 @@ impl DeserializerConfig {
             DeserializerConfig::Gelf(_) => {
                 FramingConfig::CharacterDelimited(CharacterDelimitedDecoderConfig::new(0))
             }
+            DeserializerConfig::CloudwatchLogs(_) => FramingConfig::Bytes,
         }
     }
 
@@ -422,6 +444,7 @@ impl DeserializerConfig {
     pub fn default_message_based_framing(&self) -> FramingConfig {
         match self {
             DeserializerConfig::Gelf(_) => FramingConfig::ChunkedGelf(Default::default()),
+            DeserializerConfig::CloudwatchLogs(_) => FramingConfig::Bytes,
             _ => FramingConfig::Bytes,
         }
     }
@@ -445,6 +468,7 @@ impl DeserializerConfig {
             DeserializerConfig::Gelf(config) => config.output_type(),
             DeserializerConfig::Vrl(config) => config.output_type(),
             DeserializerConfig::Influxdb(config) => config.output_type(),
+            DeserializerConfig::CloudwatchLogs(config) => config.output_type(),
         }
     }
 
@@ -467,6 +491,7 @@ impl DeserializerConfig {
             DeserializerConfig::Gelf(config) => config.schema_definition(log_namespace),
             DeserializerConfig::Influxdb(config) => config.schema_definition(log_namespace),
             DeserializerConfig::Vrl(config) => config.schema_definition(log_namespace),
+            DeserializerConfig::CloudwatchLogs(config) => config.schema_definition(log_namespace),
         }
     }
 
@@ -501,7 +526,8 @@ impl DeserializerConfig {
                 | DeserializerConfig::Bytes
                 | DeserializerConfig::Gelf(_)
                 | DeserializerConfig::Influxdb(_)
-                | DeserializerConfig::Vrl(_),
+                | DeserializerConfig::Vrl(_)
+                | DeserializerConfig::CloudwatchLogs(_),
                 _,
             ) => "text/plain",
             #[cfg(feature = "syslog")]
@@ -540,6 +566,8 @@ pub enum Deserializer {
     Influxdb(InfluxdbDeserializer),
     /// Uses a `VrlDeserializer` for deserialization.
     Vrl(VrlDeserializer),
+    /// Uses a `CloudwatchLogsDeserializer` for deserialization.
+    CloudwatchLogs(CloudwatchLogsDeserializer),
 }
 
 impl format::Deserializer for Deserializer {
@@ -563,6 +591,7 @@ impl format::Deserializer for Deserializer {
             Deserializer::Gelf(deserializer) => deserializer.parse(bytes, log_namespace),
             Deserializer::Influxdb(deserializer) => deserializer.parse(bytes, log_namespace),
             Deserializer::Vrl(deserializer) => deserializer.parse(bytes, log_namespace),
+            Deserializer::CloudwatchLogs(deserializer) => deserializer.parse(bytes, log_namespace),
         }
     }
 }
