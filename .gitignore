@@ -72,6 +72,7 @@ local/
 
 # vscode
 .vscode/
+.cursor/*
 
 # Claude Code project directory (local tooling, not tracked)
 .claude/
